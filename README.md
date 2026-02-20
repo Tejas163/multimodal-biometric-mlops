@@ -173,7 +173,7 @@ python scripts/train.py --multirun \
 ### 4. View MLflow dashboard
 
 ```bash
-mlflow ui --backend-store-uri mlruns/
+mlflow ui --backend-store-uri sqlite:///mlflow.db
 ```
 Open **http://localhost:5000** — every run's parameters, metrics, config snapshot, and registered model will be visible.
 
@@ -187,7 +187,7 @@ import torch
 pipeline = InferencePipeline.from_registry(
     model_name="BiometricFusionModel",
     stage="Production",
-    tracking_uri="mlruns/",
+    tracking_uri="sqlite:///mlflow.db",
 )
 
 # Or load from a local checkpoint

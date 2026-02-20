@@ -6,7 +6,7 @@ on:
       epochs:
         description: "Number of training epochs"
         required: false
-        default: "5"
+        default: "50"
       learning_rate:
         description: "Learning rate"
         required: false
@@ -66,18 +66,18 @@ jobs:
       - name: Run training
         run: |
           python scripts/train.py \
-            training.epochs=${{ github.event.inputs.epochs || '5' }} \
+            training.epochs=${{ github.event.inputs.epochs || '50' }} \
             training.learning_rate=${{ github.event.inputs.learning_rate || '1e-3' }} \
             model.fusion.method=${{ github.event.inputs.fusion_method || 'concat' }} \
             data.parquet_dir=data/parquet \
-            mlflow.tracking_uri=mlruns/
+            mlflow.tracking_uri=sqlite:///mlflow.db
 
       - name: Upload MLflow artifacts
         uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: mlflow-runs
-          path: mlruns/
+          name: mlflow-database
+          path: mlflow.db
           retention-days: 30
 
       - name: Upload checkpoints

@@ -24,7 +24,6 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
-import numpy as np
 import pyarrow.parquet as pq
 import torch
 from torch import Tensor

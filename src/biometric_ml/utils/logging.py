@@ -18,7 +18,7 @@ from __future__ import annotations
 import json
 import logging
 import sys
-from datetime import datetime, timezone
+import datetime as _dt
 
 
 class _JsonFormatter(logging.Formatter):
@@ -26,8 +26,8 @@ class _JsonFormatter(logging.Formatter):
 
     def format(self, record: logging.LogRecord) -> str:
         payload = {
-            "timestamp": datetime.fromtimestamp(
-                record.created, tz=timezone.utc
+            "timestamp": _dt.datetime.fromtimestamp(
+                record.created, tz=_dt.UTC
             ).isoformat(),
             "level": record.levelname,
             "logger": record.name,

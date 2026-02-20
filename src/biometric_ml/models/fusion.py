@@ -29,7 +29,7 @@ from __future__ import annotations
 
 import torch
 import torch.nn as nn
-import torch.nn.functional as F
+import torch.nn.functional as F  # noqa: N812
 from torch import Tensor
 
 from biometric_ml.models.encoders import build_encoders
@@ -183,7 +183,7 @@ class BiometricFusionModel(nn.Module):
         data_cfg: dict,
         num_classes: int,
         feature_dims: dict[str, int],
-    ) -> "BiometricFusionModel":
+    ) -> BiometricFusionModel:
         """Construct the model directly from Hydra OmegaConf dicts."""
         active = [m for m, enabled in data_cfg["modalities"].items() if enabled]
         return cls(

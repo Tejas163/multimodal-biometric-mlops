@@ -39,7 +39,7 @@ from typing import Any
 
 import mlflow.pytorch
 import torch
-import torch.nn.functional as F
+import torch.nn.functional as F  # noqa: N812
 from torch import Tensor
 
 from biometric_ml.data.schema import MODALITY_REGISTRY
@@ -92,7 +92,7 @@ class InferencePipeline:
         active_modalities: list[str] | None = None,
         top_k: int = 5,
         device: str | None = None,
-    ) -> "InferencePipeline":
+    ) -> InferencePipeline:
         """
         Load the latest model in ``stage`` from the MLflow Model Registry.
 
@@ -123,7 +123,7 @@ class InferencePipeline:
         active_modalities: list[str],
         top_k: int = 5,
         device: str | None = None,
-    ) -> "InferencePipeline":
+    ) -> InferencePipeline:
         """
         Load model weights from a local ``.pt`` checkpoint file.
 
