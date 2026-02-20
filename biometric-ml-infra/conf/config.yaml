@@ -1,5 +1,6 @@
 defaults:
   - data: biometric
+  - num_subjects: 200
   - model: fusion
   - training: default
   - mlflow: local
