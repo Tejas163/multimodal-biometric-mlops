@@ -31,7 +31,7 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 import ray
 
-from biometric_ml.data.schema import MODALITY_REGISTRY, FUSED_SCHEMA
+from biometric_ml.data.schema import FUSED_SCHEMA, MODALITY_REGISTRY
 
 log = logging.getLogger(__name__)
 

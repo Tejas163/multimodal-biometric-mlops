@@ -15,7 +15,6 @@ import torch
 from biometric_ml.models.encoders import ModalityEncoder, build_encoders
 from biometric_ml.models.fusion import BiometricFusionModel, FusionMLP
 
-
 # ---------------------------------------------------------------------------
 # Fixtures
 # ---------------------------------------------------------------------------

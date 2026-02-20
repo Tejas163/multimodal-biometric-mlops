@@ -10,7 +10,6 @@ run without any external data or network access (CI-friendly).
 
 from __future__ import annotations
 
-import tempfile
 from pathlib import Path
 
 import numpy as np
@@ -21,7 +20,6 @@ import torch
 
 from biometric_ml.data.dataset import BiometricDataset
 from biometric_ml.data.schema import FUSED_SCHEMA
-
 
 # ---------------------------------------------------------------------------
 # Fixtures
@@ -110,5 +108,5 @@ class TestBiometricDataset:
     def test_schema_enforcement(self, tmp_path):
         """Writing with wrong column types should raise at table creation."""
         bad_rows = [{"subject_id": "not-an-int", "sample_id": "x"}]
-        with pytest.raises(Exception):
+        with pytest.raises(pa.lib.ArrowInvalid):
             pa.Table.from_pylist(bad_rows, schema=FUSED_SCHEMA)

@@ -7,7 +7,6 @@ MLflow Registry path requires a running MLflow server).
 
 from __future__ import annotations
 
-import tempfile
 from pathlib import Path
 
 import pytest

@@ -29,7 +29,7 @@ from __future__ import annotations
 
 import torch
 import torch.nn as nn
-import torch.nn.functional as F
+import torch.nn.functional as nn_func
 from torch import Tensor
 
 from biometric_ml.models.encoders import build_encoders
@@ -49,7 +49,7 @@ class AttentionFusion(nn.Module):
     def forward(self, embeddings: list[Tensor]) -> Tensor:
         stacked = torch.stack(embeddings, dim=1)          # (B, M, H)
         scores = self.attn(stacked).squeeze(-1)            # (B, M)
-        weights = F.softmax(scores, dim=-1).unsqueeze(-1)  # (B, M, 1)
+        weights = nn_func.softmax(scores, dim=-1).unsqueeze(-1)  # (B, M, 1)
         fused = (stacked * weights).sum(dim=1)             # (B, H)
         return fused
 
@@ -183,7 +183,7 @@ class BiometricFusionModel(nn.Module):
         data_cfg: dict,
         num_classes: int,
         feature_dims: dict[str, int],
-    ) -> "BiometricFusionModel":
+    ) -> BiometricFusionModel:
         """Construct the model directly from Hydra OmegaConf dicts."""
         active = [m for m, enabled in data_cfg["modalities"].items() if enabled]
         return cls(
