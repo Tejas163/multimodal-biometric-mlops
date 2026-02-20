@@ -1,0 +1,10 @@
+# MLflow tracking configuration
+tracking_uri: mlruns/        # Local: file path. Remote: http://mlflow-server:5000
+experiment_name: biometric-recognition
+
+# Registered model name in MLflow Model Registry
+registered_model_name: BiometricFusionModel
+
+# Artifacts to log alongside each run
+log_config_snapshot: true    # Save Hydra config.yaml as artifact
+log_model_on_best: true      # Register model when val loss improves

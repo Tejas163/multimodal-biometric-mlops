@@ -1,0 +1,10 @@
+defaults:
+  - data: biometric
+  - model: fusion
+  - training: default
+  - mlflow: local
+  - _self_
+
+project:
+  name: biometric-ml-infra
+  version: "1.0.0"

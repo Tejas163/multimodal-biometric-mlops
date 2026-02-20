@@ -1,0 +1,44 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+dist/
+build/
+.eggs/
+*.egg
+
+# Virtual envs
+.venv/
+venv/
+env/
+
+# ML artifacts (tracked by MLflow / DVC instead)
+mlruns/
+checkpoints/
+outputs/
+data/parquet/
+data/raw/
+*.pt
+*.ckpt
+
+# Hydra outputs
+outputs/
+multirun/
+
+# IDE
+.vscode/
+.idea/
+*.iml
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Coverage
+.coverage
+coverage.xml
+htmlcov/
+
+# Jupyter
+.ipynb_checkpoints/
+*.ipynb

@@ -1,0 +1,10 @@
+# Fusion model architecture configuration
+encoder_hidden_dim: 256   # Shared projection dim for each modality encoder
+encoder_dropout: 0.3
+
+fusion:
+  method: concat           # Options: concat | attention | mean
+  hidden_dims: [512, 256]  # MLP layers after fusion
+  dropout: 0.4
+
+num_classes: 100           # Number of unique users/identities to recognise

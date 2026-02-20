@@ -1,0 +1,20 @@
+# Training loop configuration
+seed: 42
+deterministic: true      # torch.use_deterministic_algorithms(True)
+
+epochs: 50
+batch_size: 64
+learning_rate: 1.0e-3
+weight_decay: 1.0e-4
+
+scheduler:
+  name: cosine            # Options: cosine | step | none
+  T_max: 50               # For cosine annealing
+
+gradient_clip_val: 1.0    # Max gradient norm (0 = disabled)
+early_stopping_patience: 10
+
+checkpoint:
+  dir: checkpoints/
+  save_top_k: 3           # Keep best k checkpoints by val_loss
+  monitor: val/loss

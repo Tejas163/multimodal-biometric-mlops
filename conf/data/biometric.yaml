@@ -1,0 +1,27 @@
+# Data configuration for multimodal biometric dataset
+raw_dir: data/raw
+processed_dir: data/processed
+parquet_dir: data/parquet
+
+# Which modalities to use — set to false to ablate
+modalities:
+  face: true        # 128-d FaceNet-style embedding or raw image
+  fingerprint: true # minutiae feature vector
+  voice: true       # MFCC feature vector
+  gait: false       # accelerometer time-series (optional)
+
+# Feature dimensions per modality (after per-modality encoder input)
+feature_dims:
+  face: 512
+  fingerprint: 256
+  voice: 128
+  gait: 64
+
+# Train / val / test split ratios (must sum to 1.0)
+splits:
+  train: 0.70
+  val: 0.15
+  test: 0.15
+
+num_workers: 0           # DataLoader workers (use 0 on Windows to avoid spawn issues)
+pin_memory: false         # Set true only when training on GPU
