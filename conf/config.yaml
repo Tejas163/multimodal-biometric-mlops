@@ -8,3 +8,7 @@ defaults:
 project:
   name: biometric-ml-infra
   version: "1.0.0"
+
+# Number of subjects for synthetic ingestion.
+# Override from CLI: python scripts/ingest_data.py num_subjects=500
+num_subjects: 200

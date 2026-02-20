@@ -3,19 +3,13 @@ scripts/ingest_data.py
 ----------------------
 CLI entry point for the Ray-parallel ingestion pipeline.
 
-Reads raw biometric data from ``data.raw_dir``, processes it in parallel
-using Ray, and writes split-stratified Parquet files to ``data.parquet_dir``.
-
 Usage::
 
-    # Default config
+    # Default (200 subjects, paths from conf/)
     python scripts/ingest_data.py
 
-    # Override num_subjects and output dir
+    # Override subjects and output dir
     python scripts/ingest_data.py num_subjects=500 data.parquet_dir=data/parquet_v2
-
-    # Use a specific Hydra config group override
-    python scripts/ingest_data.py data=biometric training=default
 """
 
 import logging
@@ -25,7 +19,6 @@ from pathlib import Path
 import hydra
 from omegaconf import DictConfig
 
-# Ensure the src package is importable when running from repo root
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from biometric_ml.data.ingest import run_ingestion
@@ -41,11 +34,12 @@ def main(cfg: DictConfig) -> None:
         m for m, enabled in cfg.data.modalities.items() if enabled
     ]
     log.info("Active modalities: %s", active_modalities)
+    log.info("Ingesting %d subjects → %s", cfg.num_subjects, cfg.data.parquet_dir)
 
     run_ingestion(
         raw_dir=cfg.data.raw_dir,
         parquet_dir=cfg.data.parquet_dir,
-        num_subjects=cfg.get("num_subjects", 200),  # override via CLI
+        num_subjects=cfg.num_subjects,       # ← reads from config, overridable via CLI
         active_modalities=active_modalities,
         splits=dict(cfg.data.splits),
     )
