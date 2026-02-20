@@ -15,7 +15,6 @@ import torch
 from biometric_ml.models.encoders import ModalityEncoder, build_encoders
 from biometric_ml.models.fusion import BiometricFusionModel, FusionMLP
 
-
 # ---------------------------------------------------------------------------
 # Fixtures
 # ---------------------------------------------------------------------------
@@ -61,7 +60,6 @@ class TestModalityEncoder:
 
     def test_residual_projection_different_dims(self):
         enc = ModalityEncoder(input_dim=512, hidden_dim=HIDDEN_DIM)
-        # Ensure residual Linear is used (not Identity)
         assert not isinstance(enc._residual, torch.nn.Identity)
 
     def test_residual_identity_same_dims(self):
@@ -98,7 +96,6 @@ class TestBiometricFusionModel:
         assert not torch.isnan(logits).any()
 
     def test_zero_input_no_crash(self):
-        """Model should handle zero vectors (missing modality stand-in)."""
         model = _make_model()
         inputs = {m: torch.zeros(BATCH, FEATURE_DIMS[m]) for m in ACTIVE}
         logits = model(inputs)
@@ -110,7 +107,6 @@ class TestBiometricFusionModel:
         assert n_params > 0
 
     def test_eval_mode_no_dropout_effect(self):
-        """In eval mode two identical forward passes must give identical output."""
         model = _make_model()
         model.eval()
         inputs = _make_inputs()
@@ -137,7 +133,12 @@ class TestBiometricFusionModel:
             "fusion": {"method": "concat", "hidden_dims": [64], "dropout": 0.0},
         }
         data_cfg = {
-            "modalities": {"face": True, "fingerprint": True, "voice": True, "gait": False},
+            "modalities": {
+                "face": True,
+                "fingerprint": True,
+                "voice": True,
+                "gait": False,
+            },
         }
         model = BiometricFusionModel.from_config(
             model_cfg=model_cfg,

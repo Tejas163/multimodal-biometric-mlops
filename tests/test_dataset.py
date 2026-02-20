@@ -10,7 +10,6 @@ run without any external data or network access (CI-friendly).
 
 from __future__ import annotations
 
-import tempfile
 from pathlib import Path
 
 import numpy as np
@@ -41,7 +40,7 @@ def _make_parquet(path: Path, n_subjects: int = 5, n_samples_each: int = 3) -> N
                     "face_embedding": rng.random(512).astype(np.float32).tolist(),
                     "fingerprint_features": rng.random(256).astype(np.float32).tolist(),
                     "voice_features": rng.random(128).astype(np.float32).tolist(),
-                    "gait_features": None,  # gait inactive
+                    "gait_features": None,
                     "split": "train",
                 }
             )
@@ -72,7 +71,7 @@ class TestBiometricDataset:
         assert "face" in item
         assert "voice" in item
         assert "label" in item
-        assert "fingerprint" not in item  # not requested
+        assert "fingerprint" not in item
 
     def test_tensor_dtypes_and_shapes(self, parquet_path):
         ds = BiometricDataset(parquet_path, active_modalities=["face", "fingerprint"])

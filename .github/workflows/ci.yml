@@ -21,13 +21,13 @@ jobs:
           python-version: "3.12"
           cache: pip
 
-      - name: Install dependencies
+      - name: Install lint tools
         run: |
           pip install --upgrade pip
           pip install ruff mypy types-PyYAML
 
       - name: Ruff lint (style + import order)
-        run: ruff check src/ scripts/ tests/
+        run: ruff check src/ scripts/ tests/ --select E,W,F,I,B,UP,N
 
       - name: Ruff format check
         run: ruff format --check src/ scripts/ tests/
