@@ -3,7 +3,7 @@ deterministic: false
 
 epochs: 60
 batch_size: 16             # larger batch = more stable gradients, less overfitting
-learning_rate: 1.0e-4      # reduced — 1e-3 was too fast, caused overfitting by epoch 3
+learning_rate: 5.0e-4      # reduced — 1e-3 was too fast, caused overfitting by epoch 3
 weight_decay: 1.0e-2       # stronger L2 regularisation to fight overfitting
 
 scheduler:

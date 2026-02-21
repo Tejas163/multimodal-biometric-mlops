@@ -110,7 +110,7 @@ class Trainer:
         log.info("Trainable param tensors: %d", len(trainable))
 
         self.optimizer = self._init_optimizer()        
-        self.scheduler    = CosineAnnealingLR(self.optimizer, T_max=t.epochs, eta_min=5e-5)
+        self.scheduler    = CosineAnnealingLR(self.optimizer, T_max=t.epochs, eta_min=1e-5)
         self.stopper      = EarlyStopper(patience=t.early_stopping_patience)
         self.ckpt_manager = CheckpointManager(Path(t.checkpoint.dir), t.checkpoint.save_top_k)
         self.grad_clip    = t.gradient_clip_val
@@ -120,7 +120,7 @@ class Trainer:
         return Adam(
             filter(lambda p: p.requires_grad, self.model.parameters()),
             lr=1e-4,
-            weight_decay=0.1 # Higher weight decay for small data
+            weight_decay=1e-3 # Higher weight decay for small data
         )
 
     def fit(self) -> None:

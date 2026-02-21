@@ -30,7 +30,7 @@ class IrisBranch(nn.Module):
             nn.Conv2d(1, 8, kernel_size=5, stride=2, padding=0), # Fewer filters, larger stride
             nn.ReLU(),
             nn.BatchNorm2d(8),
-            nn.Dropout2d(0.5), # Ultra-high dropout
+            nn.Dropout2d(0.3), # Ultra-high dropout
             nn.AdaptiveAvgPool2d(1),
             nn.Flatten(),
             nn.Linear(8, 64), # Smaller output dimension (16 instead of 32/64)
@@ -90,8 +90,10 @@ class BiometricFusionModel(nn.Module):
         self.classifier = nn.Sequential(
             nn.Linear(fusion_dim, 256), # Reduced from 128 to prevent overfitting
             nn.ReLU(),
-            nn.Dropout(0.5),           # High dropout to fight overfitting
-            nn.Linear(256, num_classes),
+            nn.Dropout(0.3),  
+            nn.Linear(256,128),    # High dropout to fight overfitting
+            nn.ReLU(),
+            nn.Linear(128, num_classes),
         )
     
     def set_mobilenet_frozen(self, freeze: bool):
