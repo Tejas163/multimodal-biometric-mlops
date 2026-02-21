@@ -21,3 +21,9 @@ pytest-cov>=4.1.0
 ruff>=0.2.0
 mypy>=1.8.0
 types-PyYAML
+
+# Image processing (for HOG feature extraction)
+scikit-image>=0.21.0
+Pillow>=10.0.0
+python-dotenv>=1.0.0   # load .env credentials
+kaggle>=1.6.0          # Kaggle dataset download CLI

@@ -1,16 +1,18 @@
 """
 scripts/ingest_data.py
 ----------------------
-CLI entry point for the Ray-parallel ingestion pipeline.
+CLI entry point for the Kaggle iris+fingerprint ingestion pipeline.
 
 Usage::
 
-    # Default (200 subjects, paths from conf/)
+    # Data already downloaded and extracted to data/data/
     python scripts/ingest_data.py
 
-    # Override subjects and output dir
-    python scripts/ingest_data.py num_subjects=500 data.parquet_dir=data/parquet_v2
+    # Override paths
+    python scripts/ingest_data.py data.raw_dir=data/data data.parquet_dir=data/parquet
 """
+
+from __future__ import annotations
 
 import logging
 import sys
@@ -30,16 +32,15 @@ def main(cfg: DictConfig) -> None:
     setup_logging(level="INFO", json_format=False)
     log = logging.getLogger(__name__)
 
-    active_modalities = [
-        m for m, enabled in cfg.data.modalities.items() if enabled
-    ]
-    log.info("Active modalities: %s", active_modalities)
-    log.info("Ingesting %d subjects → %s", cfg.num_subjects, cfg.data.parquet_dir)
+    active_modalities = [m for m, enabled in cfg.data.modalities.items() if enabled]
+    log.info("Active modalities : %s", active_modalities)
+    log.info("Reading images from: %s", cfg.data.raw_dir)
+    log.info("Writing Parquet to : %s", cfg.data.parquet_dir)
 
     run_ingestion(
         raw_dir=cfg.data.raw_dir,
         parquet_dir=cfg.data.parquet_dir,
-        num_subjects=cfg.num_subjects,       # ← reads from config, overridable via CLI
+        num_subjects=cfg.num_subjects,
         active_modalities=active_modalities,
         splits=dict(cfg.data.splits),
     )

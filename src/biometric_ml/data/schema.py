@@ -1,87 +1,60 @@
 """
 schema.py
 ---------
-Canonical PyArrow schemas for each biometric modality.
+Canonical PyArrow schemas for the Kaggle Multimodal Iris+Fingerprint dataset.
 
-Design note:
-    All raw data is normalised to fixed-width floating-point feature vectors
-    and stored as Parquet files keyed by subject_id and sample_id.  Using
-    explicit schemas enforces contracts across ingestion, training, and
-    inference — any upstream change that breaks the schema is caught at
-    ingest time rather than silently corrupting model inputs.
+Dataset structure (ninadmehendale/multimodal-iris-fingerprint-biometric-data):
+    data/
+      iris/
+        {subject_id}_left/   fatmal1.bmp ... fatmal5.bmp
+        {subject_id}_right/  fatmar1.bmp ... fatmar5.bmp
+      fingerprint/
+        {subject_id}_left/   ...
+        {subject_id}_right/  ...
+
+Feature extraction:
+    Iris        → HOG descriptor on 64x64 grayscale BMP  → 1764-d vector
+    Fingerprint → HOG descriptor on 96x96 grayscale BMP  → 1764-d vector
+
+Both left+right samples are averaged into one vector per sample per modality,
+giving one fused row per (subject, sample_index) pair.
 """
 
 from __future__ import annotations
 
 import pyarrow as pa
 
-# ---------------------------------------------------------------------------
-# Per-modality feature schemas
-# ---------------------------------------------------------------------------
+# Feature vector dimensions after HOG extraction
+IRIS_DIM         = 1764   # HOG on 64x64, 9 orientations, 2x2 cells per block
+FINGERPRINT_DIM  = 1764   # HOG on 96x96, same params — matches iris dim
 
-FACE_SCHEMA = pa.schema(
-    [
-        pa.field("subject_id", pa.int32(), nullable=False),
-        pa.field("sample_id", pa.string(), nullable=False),
-        # 512-d L2-normalised face embedding (e.g., from ArcFace / FaceNet)
-        pa.field("embedding", pa.list_(pa.float32(), 512), nullable=False),
-        pa.field("source", pa.string()),          # camera / sensor identifier
-        pa.field("quality_score", pa.float32()),  # optional liveness / quality
-    ]
-)
+IRIS_SCHEMA = pa.schema([
+    pa.field("subject_id",  pa.int32(),  nullable=False),
+    pa.field("sample_id",   pa.string(), nullable=False),
+    pa.field("features",    pa.list_(pa.float32(), IRIS_DIM), nullable=False),
+    pa.field("side",        pa.string()),   # "left" | "right" | "both"
+    pa.field("quality",     pa.float32()),
+])
 
-FINGERPRINT_SCHEMA = pa.schema(
-    [
-        pa.field("subject_id", pa.int32(), nullable=False),
-        pa.field("sample_id", pa.string(), nullable=False),
-        # 256-d minutiae descriptor vector
-        pa.field("features", pa.list_(pa.float32(), 256), nullable=False),
-        pa.field("finger_id", pa.int8()),         # 0-9 for each finger
-        pa.field("quality_score", pa.float32()),
-    ]
-)
+FINGERPRINT_SCHEMA = pa.schema([
+    pa.field("subject_id",  pa.int32(),  nullable=False),
+    pa.field("sample_id",   pa.string(), nullable=False),
+    pa.field("features",    pa.list_(pa.float32(), FINGERPRINT_DIM), nullable=False),
+    pa.field("side",        pa.string()),
+    pa.field("quality",     pa.float32()),
+])
 
-VOICE_SCHEMA = pa.schema(
-    [
-        pa.field("subject_id", pa.int32(), nullable=False),
-        pa.field("sample_id", pa.string(), nullable=False),
-        # 128-d MFCC / x-vector speaker embedding
-        pa.field("features", pa.list_(pa.float32(), 128), nullable=False),
-        pa.field("duration_sec", pa.float32()),
-        pa.field("snr_db", pa.float32()),         # signal-to-noise ratio
-    ]
-)
+# Fused schema — one row per (subject, sample_index)
+FUSED_SCHEMA = pa.schema([
+    pa.field("subject_id",            pa.int32(),  nullable=False),
+    pa.field("sample_id",             pa.string(), nullable=False),
+    pa.field("iris_features",         pa.list_(pa.float32(), IRIS_DIM)),
+    pa.field("fingerprint_features",  pa.list_(pa.float32(), FINGERPRINT_DIM)),
+    pa.field("split",                 pa.string(), nullable=False),
+])
 
-GAIT_SCHEMA = pa.schema(
-    [
-        pa.field("subject_id", pa.int32(), nullable=False),
-        pa.field("sample_id", pa.string(), nullable=False),
-        # 64-d gait cycle descriptor
-        pa.field("features", pa.list_(pa.float32(), 64), nullable=False),
-        pa.field("num_steps", pa.int16()),
-    ]
-)
-
-# ---------------------------------------------------------------------------
-# Fused (joined) sample schema — produced by the dataset class
-# ---------------------------------------------------------------------------
-
-FUSED_SCHEMA = pa.schema(
-    [
-        pa.field("subject_id", pa.int32(), nullable=False),
-        pa.field("sample_id", pa.string(), nullable=False),
-        pa.field("face_embedding", pa.list_(pa.float32(), 512)),
-        pa.field("fingerprint_features", pa.list_(pa.float32(), 256)),
-        pa.field("voice_features", pa.list_(pa.float32(), 128)),
-        pa.field("gait_features", pa.list_(pa.float32(), 64)),
-        pa.field("split", pa.string(), nullable=False),  # train/val/test
-    ]
-)
-
-# Map modality name → (schema, feature field name, vector length)
+# Registry: modality → (schema, feature_field, vector_dim)
 MODALITY_REGISTRY: dict[str, tuple[pa.Schema, str, int]] = {
-    "face": (FACE_SCHEMA, "embedding", 512),
-    "fingerprint": (FINGERPRINT_SCHEMA, "features", 256),
-    "voice": (VOICE_SCHEMA, "features", 128),
-    "gait": (GAIT_SCHEMA, "features", 64),
+    "iris":        (IRIS_SCHEMA,        "features", IRIS_DIM),
+    "fingerprint": (FINGERPRINT_SCHEMA, "features", FINGERPRINT_DIM),
 }

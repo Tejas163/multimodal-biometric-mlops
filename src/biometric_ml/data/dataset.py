@@ -1,22 +1,7 @@
 """
 dataset.py
 ----------
-PyTorch Dataset abstraction for the multimodal biometric Parquet store.
-
-Design notes:
-    * PyArrow is used for I/O rather than pandas because it reads Parquet
-      column-by-column without materialising unnecessary data.  Only the
-      modality columns that are active in the current config are loaded —
-      reducing memory footprint proportionally to the number of disabled
-      modalities.
-
-    * The dataset is fully index-addressable (__getitem__ by integer) so it
-      integrates transparently with torch.utils.data.DataLoader, including
-      distributed samplers for multi-GPU training.
-
-    * Missing modality values (NULL in Parquet) are replaced with zero
-      vectors so the model can handle partially labelled samples without
-      requiring a separate masking pipeline.
+PyTorch Dataset that reads iris + fingerprint features from Parquet.
 """
 
 from __future__ import annotations
@@ -29,94 +14,59 @@ import torch
 from torch import Tensor
 from torch.utils.data import Dataset
 
-from biometric_ml.data.schema import MODALITY_REGISTRY
+from biometric_ml.data.schema import FINGERPRINT_DIM, IRIS_DIM, MODALITY_REGISTRY
 
-# Map modality name → column name in the fused Parquet schema
-_MODALITY_COL: dict[str, str] = {
-    "face": "face_embedding",
-    "fingerprint": "fingerprint_features",
-    "voice": "voice_features",
-    "gait": "gait_features",
+# Map modality name → (parquet column, expected dim)
+_COLUMN_MAP = {
+    "iris":        ("iris_features",        IRIS_DIM),
+    "fingerprint": ("fingerprint_features", FINGERPRINT_DIM),
 }
 
 
 class BiometricDataset(Dataset):
     """
-    Reads a split Parquet file and returns per-sample tensors.
+    Index-addressable PyTorch Dataset backed by a Parquet file.
 
     Args:
-        parquet_path:       Path to the split's ``.parquet`` file.
-        active_modalities:  List of modality names to load.
-        transform:          Optional callable applied to the sample dict
-                            after tensor conversion (e.g., augmentation).
+        parquet_path:      Path to a split Parquet file (train/val/test).
+        active_modalities: Subset of ["iris", "fingerprint"] to load.
     """
 
-    def __init__(
-        self,
-        parquet_path: str | Path,
-        active_modalities: list[str],
-        transform: Any | None = None,
-    ) -> None:
+    def __init__(self, parquet_path: Path | str, active_modalities: list[str]) -> None:
         self.parquet_path = Path(parquet_path)
         self.active_modalities = active_modalities
-        self.transform = transform
 
-        # Eagerly load the table into memory.
-        # For datasets > available RAM, replace with pq.ParquetFile and
-        # read row groups lazily in __getitem__.
-        columns = ["subject_id"] + [
-            _MODALITY_COL[m] for m in active_modalities if m in _MODALITY_COL
+        columns = ["subject_id", "sample_id"] + [
+            _COLUMN_MAP[m][0] for m in active_modalities if m in _COLUMN_MAP
         ]
-        self._table = pq.read_table(self.parquet_path, columns=columns)
+        table = pq.read_table(self.parquet_path, columns=columns)
+        self._data = table.to_pydict()
 
-        # Build a contiguous label array (subject_id → class index)
-        subject_ids = self._table["subject_id"].to_pylist()
-        unique_ids = sorted(set(subject_ids))
-        self._id_to_class: dict[int, int] = {
-            sid: idx for idx, sid in enumerate(unique_ids)
-        }
-        self._labels: list[int] = [self._id_to_class[sid] for sid in subject_ids]
-        self.num_classes: int = len(unique_ids)
-
-    # ------------------------------------------------------------------
-    # Dataset protocol
-    # ------------------------------------------------------------------
+        # Build contiguous integer labels from subject_ids
+        unique_ids = sorted(set(self._data["subject_id"]))
+        self._label_map: dict[int, int] = {sid: i for i, sid in enumerate(unique_ids)}
+        self._n = len(self._data["subject_id"])
 
     def __len__(self) -> int:
-        return len(self._table)
+        return self._n
 
     def __getitem__(self, idx: int) -> dict[str, Tensor | int]:
-        """
-        Returns a dict with:
-            * One float tensor per active modality keyed by modality name.
-            * ``label``: integer class index.
-        """
-        row = self._table.slice(idx, 1)
-        sample: dict[str, Tensor | int] = {"label": self._labels[idx]}
-
+        item: dict[str, Any] = {
+            "label": self._label_map[self._data["subject_id"][idx]]
+        }
         for modality in self.active_modalities:
-            col = _MODALITY_COL[modality]
-            _, _, dim = MODALITY_REGISTRY[modality]
-            value = row[col][0].as_py()
-
-            if value is None:
-                # Replace missing modality with a zero vector
-                tensor = torch.zeros(dim, dtype=torch.float32)
+            col, dim = _COLUMN_MAP[modality]
+            raw = self._data[col][idx]
+            if raw is None:
+                item[modality] = torch.zeros(dim, dtype=torch.float32)
             else:
-                tensor = torch.tensor(value, dtype=torch.float32)
+                item[modality] = torch.tensor(raw, dtype=torch.float32)
+        return item
 
-            sample[modality] = tensor
-
-        if self.transform is not None:
-            sample = self.transform(sample)
-
-        return sample
-
-    # ------------------------------------------------------------------
-    # Convenience
-    # ------------------------------------------------------------------
+    @property
+    def num_classes(self) -> int:
+        return len(self._label_map)
 
     @property
     def feature_dims(self) -> dict[str, int]:
-        """Return {modality: dim} for all active modalities."""
-        return {m: MODALITY_REGISTRY[m][2] for m in self.active_modalities}
+        return {m: _COLUMN_MAP[m][1] for m in self.active_modalities if m in _COLUMN_MAP}

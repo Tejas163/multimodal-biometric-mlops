@@ -15,10 +15,10 @@ Usage::
 
 from __future__ import annotations
 
+import datetime as _dt
 import json
 import logging
 import sys
-import datetime as _dt
 
 
 class _JsonFormatter(logging.Formatter):

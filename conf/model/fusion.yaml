@@ -1,10 +1,10 @@
-# Fusion model architecture configuration
-encoder_hidden_dim: 256   # Shared projection dim for each modality encoder
-encoder_dropout: 0.3
+# Model config — tuned for iris+fingerprint HOG features
+encoder_hidden_dim: 256
+encoder_dropout: 0.1      # low dropout — real data, don't over-regularise
 
 fusion:
-  method: concat           # Options: concat | attention | mean
-  hidden_dims: [512, 256]  # MLP layers after fusion
-  dropout: 0.4
+  method: concat           # concat | attention | mean
+  hidden_dims: [512, 256]
+  dropout: 0.2
 
-num_classes: 100           # Number of unique users/identities to recognise
+num_classes: 100           # overridden at runtime from actual subject count
