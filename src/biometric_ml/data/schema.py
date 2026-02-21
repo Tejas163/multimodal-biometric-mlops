@@ -1,60 +1,37 @@
 """
 schema.py
 ---------
-Canonical PyArrow schemas for the Kaggle Multimodal Iris+Fingerprint dataset.
+PyArrow schema for the Kaggle Multimodal Iris+Fingerprint dataset.
 
-Dataset structure (ninadmehendale/multimodal-iris-fingerprint-biometric-data):
-    data/
-      iris/
-        {subject_id}_left/   fatmal1.bmp ... fatmal5.bmp
-        {subject_id}_right/  fatmar1.bmp ... fatmar5.bmp
-      fingerprint/
-        {subject_id}_left/   ...
-        {subject_id}_right/  ...
-
-Feature extraction:
-    Iris        → HOG descriptor on 64x64 grayscale BMP  → 1764-d vector
-    Fingerprint → HOG descriptor on 96x96 grayscale BMP  → 1764-d vector
-
-Both left+right samples are averaged into one vector per sample per modality,
-giving one fused row per (subject, sample_index) pair.
+Each row stores raw pixel data as flattened float32 arrays:
+    fingerprint : 128 x 128 x 3 (RGB)  = 49152 values
+    iris_left   : 64  x 64  x 1 (gray) = 4096  values
+    iris_right  : 64  x 64  x 1 (gray) = 4096  values
 """
 
 from __future__ import annotations
 
 import pyarrow as pa
 
-# Feature vector dimensions after HOG extraction
-IRIS_DIM         = 1764   # HOG on 64x64, 9 orientations, 2x2 cells per block
-FINGERPRINT_DIM  = 1764   # HOG on 96x96, same params — matches iris dim
+FINGERPRINT_DIM = 128 * 128 * 3   # 49152 — flattened RGB image
+IRIS_LEFT_DIM   = 64  * 64  * 1   # 4096  — flattened grayscale image
+IRIS_RIGHT_DIM  = 64  * 64  * 1   # 4096  — flattened grayscale image
 
-IRIS_SCHEMA = pa.schema([
-    pa.field("subject_id",  pa.int32(),  nullable=False),
-    pa.field("sample_id",   pa.string(), nullable=False),
-    pa.field("features",    pa.list_(pa.float32(), IRIS_DIM), nullable=False),
-    pa.field("side",        pa.string()),   # "left" | "right" | "both"
-    pa.field("quality",     pa.float32()),
-])
+# Image shapes for reshaping inside the model
+FINGERPRINT_SHAPE = (3,   128, 128)   # CHW for PyTorch
+IRIS_SHAPE        = (1,   64,  64)    # CHW for PyTorch
 
-FINGERPRINT_SCHEMA = pa.schema([
-    pa.field("subject_id",  pa.int32(),  nullable=False),
-    pa.field("sample_id",   pa.string(), nullable=False),
-    pa.field("features",    pa.list_(pa.float32(), FINGERPRINT_DIM), nullable=False),
-    pa.field("side",        pa.string()),
-    pa.field("quality",     pa.float32()),
-])
-
-# Fused schema — one row per (subject, sample_index)
 FUSED_SCHEMA = pa.schema([
-    pa.field("subject_id",            pa.int32(),  nullable=False),
-    pa.field("sample_id",             pa.string(), nullable=False),
-    pa.field("iris_features",         pa.list_(pa.float32(), IRIS_DIM)),
-    pa.field("fingerprint_features",  pa.list_(pa.float32(), FINGERPRINT_DIM)),
-    pa.field("split",                 pa.string(), nullable=False),
+    pa.field("subject_id",      pa.int32(),  nullable=False),
+    pa.field("sample_id",       pa.string(), nullable=False),
+    pa.field("fingerprint",     pa.list_(pa.float32(), FINGERPRINT_DIM), nullable=False),
+    pa.field("iris_left",       pa.list_(pa.float32(), IRIS_LEFT_DIM),   nullable=False),
+    pa.field("iris_right",      pa.list_(pa.float32(), IRIS_RIGHT_DIM),  nullable=False),
+    pa.field("split",           pa.string(), nullable=False),
 ])
 
-# Registry: modality → (schema, feature_field, vector_dim)
 MODALITY_REGISTRY: dict[str, tuple[pa.Schema, str, int]] = {
-    "iris":        (IRIS_SCHEMA,        "features", IRIS_DIM),
-    "fingerprint": (FINGERPRINT_SCHEMA, "features", FINGERPRINT_DIM),
+    "fingerprint": (FUSED_SCHEMA, "fingerprint", FINGERPRINT_DIM),
+    "iris_left":   (FUSED_SCHEMA, "iris_left",   IRIS_LEFT_DIM),
+    "iris_right":  (FUSED_SCHEMA, "iris_right",  IRIS_RIGHT_DIM),
 }

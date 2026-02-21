@@ -7,13 +7,18 @@ build/
 .eggs/
 *.egg
 
-# Virtual envs
+# Virtual environments — never commit these
 .venv/
+.venv312/
 venv/
+venv312/
 env/
+.env312/
+*venv*/
 
 # ML artifacts (tracked by MLflow / DVC instead)
 mlruns/
+mlflow.db
 checkpoints/
 outputs/
 data/parquet/
@@ -42,3 +47,17 @@ htmlcov/
 # Jupyter
 .ipynb_checkpoints/
 *.ipynb
+# Environment variables & secrets — never commit these
+.env
+.env.*
+.env.local
+.env.production
+*.env
+# Kaggle credentials
+.kaggle/
+kaggle.json
+# API keys
+*.key
+*.pem
+secrets.yaml
+secrets.json

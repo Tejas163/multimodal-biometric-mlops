@@ -80,7 +80,6 @@ class TestInferencePipeline:
         assert len(result.top_k_probs) == 5
 
     def test_probs_sum_to_one_approx(self, pipeline):
-        """Top-k probs won't sum to 1 if k < num_classes; just check range."""
         features = {m: torch.randn(FEATURE_DIMS[m]).tolist() for m in ACTIVE}
         result = pipeline.predict(features)
         for p in result.top_k_probs:
@@ -92,13 +91,13 @@ class TestInferencePipeline:
         assert isinstance(result, PredictionResult)
 
     def test_missing_modality_raises(self, pipeline):
-        features = {"face": torch.randn(512).tolist()}  # missing fingerprint+voice
+        features = {"face": torch.randn(512).tolist()}
         with pytest.raises(ValueError, match="Missing modality"):
             pipeline.predict(features)
 
     def test_wrong_dim_raises(self, pipeline):
         features = {
-            "face": torch.randn(128).tolist(),       # wrong dim (expected 512)
+            "face": torch.randn(128).tolist(),
             "fingerprint": torch.randn(256).tolist(),
             "voice": torch.randn(128).tolist(),
         }

@@ -1,10 +1,9 @@
-# Model config — tuned for iris+fingerprint HOG features
+# Architecture defined in BiometricFusionModel — no config needed
+# Kept for compatibility with Hydra config system
 encoder_hidden_dim: 256
-encoder_dropout: 0.1      # low dropout — real data, don't over-regularise
-
+encoder_dropout: 0.0
 fusion:
-  method: concat           # concat | attention | mean
-  hidden_dims: [512, 256]
-  dropout: 0.2
-
-num_classes: 100           # overridden at runtime from actual subject count
+  method: concat
+  hidden_dims: [128]
+  dropout: 0.5        # matches notebook Dropout(0.5)
+num_classes: 45       # overridden at runtime

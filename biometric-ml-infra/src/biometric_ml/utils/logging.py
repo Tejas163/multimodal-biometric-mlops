@@ -15,10 +15,10 @@ Usage::
 
 from __future__ import annotations
 
+import datetime as _dt
 import json
 import logging
 import sys
-from datetime import UTC, datetime
 
 
 class _JsonFormatter(logging.Formatter):
@@ -26,8 +26,8 @@ class _JsonFormatter(logging.Formatter):
 
     def format(self, record: logging.LogRecord) -> str:
         payload = {
-            "timestamp": datetime.fromtimestamp(
-                record.created, tz=UTC
+            "timestamp": _dt.datetime.fromtimestamp(
+                record.created, tz=_dt.UTC
             ).isoformat(),
             "level": record.levelname,
             "logger": record.name,

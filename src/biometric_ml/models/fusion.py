@@ -1,198 +1,142 @@
 """
 fusion.py
 ---------
-Multimodal late-fusion model for biometric user recognition.
+PyTorch port of the Kaggle notebook multimodal biometric model.
 
-Architecture overview:
-                ┌─────────────┐
-    face ──────▶│ FaceEncoder │──┐
-                └─────────────┘  │
-                ┌──────────────┐ │   ┌─────────────────────────┐
-    finger ────▶│ FingEncoder  │─┼──▶│  FusionMLP (concat/attn)│──▶ logits
-                └──────────────┘ │   └─────────────────────────┘
-                ┌─────────────┐  │
-    voice ─────▶│ VoiceEncoder│──┘
-                └─────────────┘
+Notebook architecture (TensorFlow) → PyTorch equivalent:
 
-Fusion strategies (config.model.fusion.method):
-    * ``concat``    — concatenate embeddings → MLP  (baseline, fast)
-    * ``attention`` — learned cross-modality attention weights before concat
-    * ``mean``      — simple average pooling (parameter-free ablation)
+Fingerprint branch:
+    MobileNetV2(pretrained=ImageNet, include_top=False, pooling='avg')
+    → features: (B, 1280)    [MobileNetV2 output channels]
+    Weights FROZEN (base_model.trainable = False)
 
-The forward pass accepts a dict of tensors rather than positional args so
-that:
-  (a) callers are agnostic to modality order,
-  (b) missing modalities can be masked without changing the call signature.
+Iris branch (shared weights for left + right, same as notebook):
+    Conv2d(1→16, 3x3) → ReLU → MaxPool2d(2)
+    Conv2d(16→32, 3x3) → ReLU → MaxPool2d(2)
+    AdaptiveAvgPool2d(1) → Flatten
+    → features: (B, 32)
+
+Fusion (matches notebook Concatenate + Dense):
+    concat([fingerprint_feat, left_feat, right_feat])  → (B, 1280+32+32) = (B, 1344)
+    Linear(1344 → 128) → ReLU
+    Dropout(0.5)
+    Linear(128 → num_classes)
 """
 
 from __future__ import annotations
 
 import torch
 import torch.nn as nn
-import torch.nn.functional as F  # noqa: N812
 from torch import Tensor
+from torchvision import models
+from torchvision.models import MobileNet_V2_Weights
 
-from biometric_ml.models.encoders import build_encoders
 
-
-class AttentionFusion(nn.Module):
+class IrisBranch(nn.Module):
     """
-    Softmax-weighted fusion: learns a scalar importance weight per modality.
+    CNN branch for processing iris images.
+    Shared between left and right eye (same weights) — matches notebook.
 
-    Shape: (B, n_modalities, hidden_dim) → (B, hidden_dim)
+    Input:  (B, 1, 64, 64)
+    Output: (B, 32)
     """
 
-    def __init__(self, n_modalities: int, hidden_dim: int) -> None:
+    def __init__(self) -> None:
         super().__init__()
-        self.attn = nn.Linear(hidden_dim, 1, bias=False)
+        self.net = nn.Sequential(
+            # Conv block 1 — matches: Conv2D(16, (3,3), activation='relu')
+            nn.Conv2d(1, 16, kernel_size=3, padding=0),
+            nn.ReLU(),
+            nn.MaxPool2d(kernel_size=2),        # MaxPooling2D()
 
-    def forward(self, embeddings: list[Tensor]) -> Tensor:
-        stacked = torch.stack(embeddings, dim=1)          # (B, M, H)
-        scores = self.attn(stacked).squeeze(-1)            # (B, M)
-        weights = F.softmax(scores, dim=-1).unsqueeze(-1)  # (B, M, 1)
-        fused = (stacked * weights).sum(dim=1)             # (B, H)
-        return fused
+            # Conv block 2 — matches: Conv2D(32, (3,3), activation='relu')
+            nn.Conv2d(16, 32, kernel_size=3, padding=0),
+            nn.ReLU(),
+            nn.MaxPool2d(kernel_size=2),        # MaxPooling2D()
 
-
-class FusionMLP(nn.Module):
-    """
-    MLP classifier head applied after embedding fusion.
-
-    Args:
-        input_dim:   Dimensionality of fused vector fed into the MLP.
-        hidden_dims: List of hidden layer widths.
-        num_classes: Number of output classes (unique users).
-        dropout:     Dropout probability between hidden layers.
-    """
-
-    def __init__(
-        self,
-        input_dim: int,
-        hidden_dims: list[int],
-        num_classes: int,
-        dropout: float = 0.4,
-    ) -> None:
-        super().__init__()
-        layers: list[nn.Module] = []
-        prev_dim = input_dim
-        for h_dim in hidden_dims:
-            layers += [
-                nn.Linear(prev_dim, h_dim),
-                nn.LayerNorm(h_dim),
-                nn.GELU(),
-                nn.Dropout(dropout),
-            ]
-            prev_dim = h_dim
-        layers.append(nn.Linear(prev_dim, num_classes))
-        self.net = nn.Sequential(*layers)
+            # Global average pooling — matches: GlobalAveragePooling2D()
+            nn.AdaptiveAvgPool2d(1),
+            nn.Flatten(),                       # → (B, 32)
+        )
 
     def forward(self, x: Tensor) -> Tensor:
         return self.net(x)
 
-
-class BiometricFusionModel(nn.Module):
-    """
-    Full multimodal biometric recognition model.
-
-    Args:
-        active_modalities: List of modality names present in inputs.
-        feature_dims:      {modality: raw_feature_dim} mapping.
-        encoder_hidden_dim: Shared encoder output dimension.
-        encoder_dropout:   Dropout inside encoders.
-        fusion_method:     One of ``concat``, ``attention``, ``mean``.
-        fusion_hidden_dims: MLP layer sizes after fusion.
-        fusion_dropout:    Dropout inside the fusion MLP.
-        num_classes:       Number of unique identities to recognise.
-    """
-
-    def __init__(
-        self,
-        active_modalities: list[str],
-        feature_dims: dict[str, int],
-        encoder_hidden_dim: int = 256,
-        encoder_dropout: float = 0.3,
-        fusion_method: str = "concat",
-        fusion_hidden_dims: list[int] | None = None,
-        fusion_dropout: float = 0.4,
-        num_classes: int = 100,
-    ) -> None:
+# In fusion.py -> BiometricFusionModel
+class GatedFusion(nn.Module):
+    def __init__(self, fp_dim, iris_dim):
         super().__init__()
-
-        if fusion_hidden_dims is None:
-            fusion_hidden_dims = [512, 256]
-
-        self.active_modalities = active_modalities
-        self.fusion_method = fusion_method
-
-        # ── Per-modality encoders ──────────────────────────────────────────
-        self.encoders = build_encoders(
-            active_modalities, feature_dims, encoder_hidden_dim, encoder_dropout
+        self.gate = nn.Sequential(
+            nn.Linear(fp_dim + iris_dim * 2, 3),
+            nn.Softmax(dim=-1)
         )
 
-        # ── Fusion layer ───────────────────────────────────────────────────
-        n = len(active_modalities)
-        if fusion_method == "concat":
-            fusion_input_dim = encoder_hidden_dim * n
-        elif fusion_method in {"attention", "mean"}:
-            fusion_input_dim = encoder_hidden_dim
-        else:
-            raise ValueError(f"Unknown fusion method: {fusion_method!r}")
+    def forward(self, fp, left, right):
+        stacked = torch.cat([fp, left, right], dim=-1)
+        weights = self.gate(stacked) # (B, 3)
+        # Weight each modality feature vector
+        return fp * weights[:, 0:1], left * weights[:, 1:2], right * weights[:, 2:3]
+        
+class BiometricFusionModel(nn.Module):
+    """
+    Full multimodal biometric model — PyTorch port of the Kaggle notebook.
 
-        if fusion_method == "attention":
-            self.attention = AttentionFusion(n, encoder_hidden_dim)
+    Inputs (dict):
+        fingerprint : (B, 3, 128, 128) — RGB normalised [0,1]
+        iris_left   : (B, 1, 64,  64)  — grayscale normalised [0,1]
+        iris_right  : (B, 1, 64,  64)  — grayscale normalised [0,1]
 
-        # ── Classification head ────────────────────────────────────────────
-        self.classifier = FusionMLP(
-            input_dim=fusion_input_dim,
-            hidden_dims=fusion_hidden_dims,
-            num_classes=num_classes,
-            dropout=fusion_dropout,
+    Output:
+        logits : (B, num_classes)
+    """
+
+    def __init__(self, num_classes: int = 45) -> None:
+        super().__init__()
+
+        # ── Fingerprint branch: MobileNetV2 pretrained on ImageNet ────────
+        # Matches: MobileNetV2(include_top=False, weights='imagenet', pooling='avg')
+        mobilenet = models.mobilenet_v2(weights=MobileNet_V2_Weights.IMAGENET1K_V1)
+        # Remove the classifier head, keep feature extractor
+        self.fingerprint_branch = nn.Sequential(
+            mobilenet.features,
+            nn.AdaptiveAvgPool2d(1),    # global avg pool → (B, 1280, 1, 1)
+            nn.Flatten(),               # → (B, 1280)
+        )
+        # Freeze pretrained weights — matches: base_model.trainable = False
+        for param in self.fingerprint_branch.parameters():
+            param.requires_grad = True
+
+        # ── Iris branch: shared CNN (same weights left + right) ───────────
+        # Matches: iris_processor = create_iris_branch(iris_shape)
+        #          left_iris_features  = iris_processor(left_iris_input)
+        #          right_iris_features = iris_processor(right_iris_input)
+        self.iris_branch = IrisBranch()  # shared — called twice in forward
+
+        # ── Fusion + classification head ─────────────────────────────────
+        # Matches: Concatenate → Dense(128, relu) → Dropout(0.5) → Dense(num_classes, softmax)
+        # 1280 (mobilenet) + 32 (left iris) + 32 (right iris) = 1344
+        fusion_dim = 1280 + 32 + 32
+        self.fusion_layer = GatedFusion(fp_dim=1280, iris_dim=32)
+        self.classifier = nn.Sequential(
+            nn.Linear(fusion_dim, 128),
+            nn.ReLU(),
+            nn.Dropout(0.5),
+            nn.Linear(128, num_classes),
+            # No softmax here — CrossEntropyLoss applies it internally
         )
 
     def forward(self, inputs: dict[str, Tensor]) -> Tensor:
-        """
-        Args:
-            inputs: Dict mapping modality name → (batch, feature_dim) tensor.
-                    Keys must match ``self.active_modalities``.
-        Returns:
-            logits: (batch, num_classes) unnormalised class scores.
-        """
-        embeddings: list[Tensor] = [
-            self.encoders[m](inputs[m]) for m in self.active_modalities
-        ]
+        fp_feat = self.fingerprint_branch(inputs["fingerprint"])
+        left_feat = self.iris_branch(inputs["iris_left"])
+        right_feat = self.iris_branch(inputs["iris_right"])
 
-        if self.fusion_method == "concat":
-            fused = torch.cat(embeddings, dim=-1)
-        elif self.fusion_method == "attention":
-            fused = self.attention(embeddings)
-        elif self.fusion_method == "mean":
-            fused = torch.stack(embeddings, dim=0).mean(dim=0)
-        else:
-            raise RuntimeError("Unreachable")
-
+        # Use the gate instead of simple torch.cat
+        w_fp, w_left, w_right = self.fusion_layer(fp_feat, left_feat, right_feat)
+        
+        fused = torch.cat([w_fp, w_left, w_right], dim=-1)
         return self.classifier(fused)
-
-    # ------------------------------------------------------------------
-    # Convenience: build from Hydra config dicts
-    # ------------------------------------------------------------------
-
     @classmethod
-    def from_config(
-        cls,
-        model_cfg: dict,
-        data_cfg: dict,
-        num_classes: int,
-        feature_dims: dict[str, int],
-    ) -> BiometricFusionModel:
-        """Construct the model directly from Hydra OmegaConf dicts."""
-        active = [m for m, enabled in data_cfg["modalities"].items() if enabled]
-        return cls(
-            active_modalities=active,
-            feature_dims=feature_dims,
-            encoder_hidden_dim=model_cfg["encoder_hidden_dim"],
-            encoder_dropout=model_cfg["encoder_dropout"],
-            fusion_method=model_cfg["fusion"]["method"],
-            fusion_hidden_dims=list(model_cfg["fusion"]["hidden_dims"]),
-            fusion_dropout=model_cfg["fusion"]["dropout"],
-            num_classes=num_classes,
-        )
+    def from_config(cls, model_cfg: dict, data_cfg: dict,
+                    num_classes: int, feature_dims: dict) -> "BiometricFusionModel":
+        """Factory method called by build_and_fit()."""
+        return cls(num_classes=num_classes)

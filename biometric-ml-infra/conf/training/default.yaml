@@ -1,20 +1,20 @@
-# Training loop configuration
+# Matches Kaggle notebook: Adam(lr=1e-4), batch_size=8, epochs=50
 seed: 42
-deterministic: true      # torch.use_deterministic_algorithms(True)
+deterministic: false   # MobileNetV2 uses non-deterministic ops on CUDA
 
 epochs: 50
-batch_size: 64
-learning_rate: 1.0e-3
-weight_decay: 1.0e-4
+batch_size: 8          # matches notebook BATCH_SIZE = 8
+learning_rate: 1.0e-4  # matches notebook Adam(learning_rate=1e-4)
+weight_decay: 0.0      # notebook uses no weight decay
 
 scheduler:
-  name: cosine            # Options: cosine | step | none
-  T_max: 50               # For cosine annealing
+  name: cosine
+  T_max: 50
 
-gradient_clip_val: 1.0    # Max gradient norm (0 = disabled)
-early_stopping_patience: 10
+gradient_clip_val: 0.0            # notebook doesn't clip gradients
+early_stopping_patience: 15
 
 checkpoint:
   dir: checkpoints/
-  save_top_k: 3           # Keep best k checkpoints by val_loss
+  save_top_k: 3
   monitor: val/loss

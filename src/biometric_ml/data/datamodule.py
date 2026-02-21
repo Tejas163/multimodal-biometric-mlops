@@ -12,6 +12,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Any, Optional
 
 import torch
 from torch.utils.data import DataLoader, WeightedRandomSampler
@@ -29,6 +30,7 @@ class DataConfig:
     num_workers: int = 4
     pin_memory: bool = True
     balance_classes: bool = False  # Use WeightedRandomSampler to handle imbalance
+    train_transforms: Optional[dict[str, Any]] = None
 
 
 class BiometricDataModule:

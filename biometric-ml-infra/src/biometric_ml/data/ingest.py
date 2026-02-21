@@ -1,21 +1,14 @@
 """
 ingest.py
 ---------
-Raw-data ingestion pipeline: reads per-subject files from ``raw_dir``,
-applies preprocessing (normalisation, quality filtering), and writes
-split-stratified Parquet files to ``parquet_dir``.
+Ingestion pipeline — stores raw normalised pixel arrays in Parquet.
+Matches the Kaggle notebook approach exactly (no HOG, raw images).
 
-Parallelism strategy (Ray):
-    Each *subject* is processed independently, making subject-level
-    parallelism a natural fit.  Ray remote tasks are dispatched one per
-    subject; Ray handles scheduling across all available CPU cores without
-    requiring the caller to manage worker pools explicitly.
-
-    For very large datasets (>1 M samples) replace the list of Ray futures
-    with a Ray Dataset pipeline to enable streaming / out-of-core processing.
-
-Usage (via CLI script):
-    python scripts/ingest_data.py data.raw_dir=data/raw data.parquet_dir=data/parquet
+Per subject (45 total):
+    Fingerprint: 20 BMPs → each stored as separate row (RGB 128x128 → 49152 floats)
+    Iris left  : 10 BMPs → paired with iris right by index
+    Iris right : 10 BMPs → paired with iris left by index
+    Result     : 10 rows per subject × 45 subjects = 450 rows total
 """
 
 from __future__ import annotations
@@ -31,74 +24,128 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 import ray
 
-from biometric_ml.data.schema import FUSED_SCHEMA, MODALITY_REGISTRY
+from biometric_ml.data.schema import (
+    FINGERPRINT_DIM,
+    FUSED_SCHEMA,
+    IRIS_LEFT_DIM,
+    IRIS_RIGHT_DIM,
+)
 
 log = logging.getLogger(__name__)
 
+FINGERPRINT_SIZE = (128, 128)
+IRIS_SIZE        = (64,  64)
 
-# ---------------------------------------------------------------------------
-# Ray remote task — processes a single subject's raw data
-# ---------------------------------------------------------------------------
+
+def _load_rgb(path: Path, size: tuple[int, int]) -> np.ndarray | None:
+    """Load image as RGB float32 [0,1], shape (H,W,3)."""
+    try:
+        from PIL import Image
+        img = Image.open(path).convert("RGB").resize(size)
+        return np.array(img, dtype=np.float32) / 255.0
+    except Exception:
+        pass
+    try:
+        import cv2
+        img = cv2.imread(str(path))
+        if img is not None:
+            img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+            return cv2.resize(img, size).astype(np.float32) / 255.0
+    except Exception:
+        pass
+    return None
+
+
+def _load_gray(path: Path, size: tuple[int, int]) -> np.ndarray | None:
+    """Load image as grayscale float32 [0,1], shape (H,W,1)."""
+    try:
+        from PIL import Image
+        img = Image.open(path).convert("L").resize(size)
+        arr = np.array(img, dtype=np.float32) / 255.0
+        return arr[:, :, np.newaxis]   # H,W → H,W,1
+    except Exception:
+        pass
+    try:
+        import cv2
+        img = cv2.imread(str(path), cv2.IMREAD_GRAYSCALE)
+        if img is not None:
+            img = cv2.resize(img, size).astype(np.float32) / 255.0
+            return img[:, :, np.newaxis]
+    except Exception:
+        pass
+    return None
+
+
+def _get_bmps(folder: Path) -> list[Path]:
+    if not folder.exists():
+        return []
+    return sorted(
+        p for p in folder.iterdir()
+        if p.suffix.lower() == ".bmp" and "desktop" not in p.name.lower()
+    )
+
 
 @ray.remote
 def process_subject(
     subject_id: int,
-    subject_dir: Path,
-    active_modalities: list[str],
+    subject_dir: str,
     split: str,
 ) -> list[dict[str, Any]]:
     """
-    Load, validate, and preprocess all samples for one subject.
-
-    Returns a list of fused-row dicts ready to be written as Parquet rows.
-    Each row contains feature vectors for every active modality, already
-    L2-normalised (face) or z-score normalised (other modalities).
-
-    NOTE: In a real deployment this function reads actual binary files
-    (images, audio, etc.) and calls the appropriate feature extractor.
-    Here we generate synthetic vectors so the infrastructure can be
-    exercised without a proprietary dataset.
+    Produce one row per iris sample pair.
+    Matches notebook: load_image() loads files[0] but we use all for more data.
+    Fingerprint is averaged across all 20 images (normalised) per row.
     """
-    rng = np.random.default_rng(seed=subject_id)  # deterministic per subject
-    samples_per_subject = int(rng.integers(5, 15))
+    subj = Path(subject_dir)
+
+    finger_paths = _get_bmps(subj / "Fingerprint")
+    left_paths   = _get_bmps(subj / "left")
+    right_paths  = _get_bmps(subj / "right")
+
+    n_samples = max(len(left_paths), len(right_paths))
+    if n_samples == 0:
+        return []
+
+    # Average all fingerprint images → one representative vector per subject
+    finger_vecs = []
+    for p in finger_paths:
+        img = _load_rgb(p, FINGERPRINT_SIZE)
+        if img is not None:
+            finger_vecs.append(img.flatten())
+    if finger_vecs:
+        finger_flat = np.mean(finger_vecs, axis=0).astype(np.float32)
+    else:
+        finger_flat = np.zeros(FINGERPRINT_DIM, dtype=np.float32)
+
     rows: list[dict[str, Any]] = []
+    for i in range(n_samples):
+        # Load left iris
+        if i < len(left_paths):
+            left_img = _load_gray(left_paths[i], IRIS_SIZE)
+            left_flat = left_img.flatten().astype(np.float32) if left_img is not None \
+                        else np.zeros(IRIS_LEFT_DIM, dtype=np.float32)
+        else:
+            left_flat = np.zeros(IRIS_LEFT_DIM, dtype=np.float32)
 
-    for i in range(samples_per_subject):
-        sample_id = f"subj{subject_id:04d}_sample{i:03d}"
-        row: dict[str, Any] = {
-            "subject_id": subject_id,
-            "sample_id": sample_id,
-            "split": split,
-            "face_embedding": None,
-            "fingerprint_features": None,
-            "voice_features": None,
-            "gait_features": None,
-        }
+        # Load right iris
+        if i < len(right_paths):
+            right_img = _load_gray(right_paths[i], IRIS_SIZE)
+            right_flat = right_img.flatten().astype(np.float32) if right_img is not None \
+                         else np.zeros(IRIS_RIGHT_DIM, dtype=np.float32)
+        else:
+            right_flat = np.zeros(IRIS_RIGHT_DIM, dtype=np.float32)
 
-        for modality in active_modalities:
-            _, field, dim = MODALITY_REGISTRY[modality]
-            vec = rng.standard_normal(dim).astype(np.float32)
-
-            if modality == "face":
-                # L2-normalise face embeddings (common practice)
-                norm = np.linalg.norm(vec)
-                vec = vec / (norm + 1e-8)
-                row["face_embedding"] = vec.tolist()
-            elif modality == "fingerprint":
-                row["fingerprint_features"] = vec.tolist()
-            elif modality == "voice":
-                row["voice_features"] = vec.tolist()
-            elif modality == "gait":
-                row["gait_features"] = vec.tolist()
-
-        rows.append(row)
+        rows.append({
+            "subject_id":  subject_id,
+            "sample_id":   f"subj{subject_id:04d}_s{i:02d}",
+            "fingerprint": finger_flat.tolist(),
+            "iris_left":   left_flat.tolist(),
+            "iris_right":  right_flat.tolist(),
+            "split":       split,
+        })
 
     return rows
 
-
-# ---------------------------------------------------------------------------
-# Orchestrator
-# ---------------------------------------------------------------------------
 
 def run_ingestion(
     raw_dir: str | Path,
@@ -108,84 +155,64 @@ def run_ingestion(
     splits: dict[str, float],
     num_cpus: int | None = None,
 ) -> None:
-    """
-    Orchestrate parallel ingestion across all subjects.
-
-    Args:
-        raw_dir:           Root directory containing per-subject subdirectories.
-        parquet_dir:       Output directory for Parquet partition files.
-        num_subjects:      Total number of unique subjects in the dataset.
-        active_modalities: List of modality names to ingest (see schema.py).
-        splits:            Dict mapping split name → fraction (must sum to 1.0).
-        num_cpus:          CPUs to give Ray (None = auto-detect).
-    """
-    raw_dir = Path(raw_dir)
+    raw_dir     = Path(raw_dir)
     parquet_dir = Path(parquet_dir)
     parquet_dir.mkdir(parents=True, exist_ok=True)
 
-    # Initialise Ray (no-op if already initialised, e.g. in tests)
-    if not ray.is_initialized():
-        ray.init(num_cpus=num_cpus, ignore_reinit_error=True)
-        log.info("Ray initialised with %s CPUs", num_cpus or os.cpu_count())
+    dataset_root = raw_dir / "IRIS and FINGERPRINT DATASET"
+    if not dataset_root.exists():
+        dataset_root = raw_dir
 
-    # Deterministic split assignment per subject
-    subject_ids = list(range(num_subjects))
-    random.seed(0)
-    random.shuffle(subject_ids)
+    subject_ids = sorted(
+        int(d.name) for d in dataset_root.iterdir()
+        if d.is_dir() and d.name.isdigit()
+    )
+    log.info("Found %d subjects", len(subject_ids))
+
+    random.seed(42)
+    shuffled = subject_ids.copy()
+    random.shuffle(shuffled)
 
     split_assignments: dict[int, str] = {}
     cum = 0
     for split_name, frac in splits.items():
-        n = int(frac * num_subjects)
-        for sid in subject_ids[cum: cum + n]:
+        n = max(1, int(frac * len(shuffled)))
+        for sid in shuffled[cum: cum + n]:
             split_assignments[sid] = split_name
         cum += n
-    # Assign any remainder to train
-    for sid in subject_ids[cum:]:
+    for sid in shuffled[cum:]:
         split_assignments[sid] = "train"
 
-    log.info(
-        "Split distribution: %s",
-        {k: sum(1 for v in split_assignments.values() if v == k) for k in splits},
-    )
+    dist = {k: sum(1 for v in split_assignments.values() if v == k) for k in splits}
+    log.info("Subject split (subjects): %s → rows: %s", dist, {k: v*10 for k, v in dist.items()})
 
-    # Dispatch one Ray task per subject
+    if not ray.is_initialized():
+        ray.init(num_cpus=num_cpus, ignore_reinit_error=True)
+
     futures = [
         process_subject.remote(
             subject_id=sid,
-            subject_dir=raw_dir / f"subject_{sid:04d}",
-            active_modalities=active_modalities,
+            subject_dir=str(dataset_root / str(sid)),
             split=split_assignments[sid],
         )
-        for sid in range(num_subjects)
+        for sid in subject_ids
     ]
 
-    log.info("Dispatched %d Ray tasks, collecting results…", len(futures))
     all_rows: list[dict[str, Any]] = []
     for result in ray.get(futures):
         all_rows.extend(result)
 
-    log.info("Total samples ingested: %d", len(all_rows))
-
-    # Write split-partitioned Parquet files
+    log.info("Total rows: %d", len(all_rows))
     _write_parquet(all_rows, parquet_dir)
-
-    log.info("Ingestion complete → %s", parquet_dir)
+    log.info("Done → %s", parquet_dir)
 
 
 def _write_parquet(rows: list[dict[str, Any]], parquet_dir: Path) -> None:
-    """Group rows by split and write one Parquet file per split."""
-    splits_seen: dict[str, list[dict[str, Any]]] = {}
+    splits_seen: dict[str, list] = {}
     for row in rows:
         splits_seen.setdefault(row["split"], []).append(row)
-
     for split_name, split_rows in splits_seen.items():
-        table = pa.Table.from_pylist(split_rows, schema=FUSED_SCHEMA)
+        table    = pa.Table.from_pylist(split_rows, schema=FUSED_SCHEMA)
         out_path = parquet_dir / f"{split_name}.parquet"
-        pq.write_table(
-            table,
-            out_path,
-            compression="snappy",      # Fast read; good for ML workloads
-            write_statistics=True,     # Enables predicate push-down
-        )
-        log.info("Wrote %d rows → %s", len(split_rows), out_path)
+        pq.write_table(table, out_path, compression="snappy", write_statistics=True)
+        log.info("  %s → %d rows", out_path, len(split_rows))

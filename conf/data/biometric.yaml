@@ -1,29 +1,25 @@
-# Data config — Kaggle Multimodal Iris+Fingerprint dataset
-# https://www.kaggle.com/datasets/ninadmehendale/multimodal-iris-fingerprint-biometric-data
-raw_dir: data/data          # folder containing iris/ and fingerprint/ subfolders
+# Kaggle: ninadmehendale/multimodal-iris-fingerprint-biometric-data
+raw_dir: data/data
 processed_dir: data/processed
 parquet_dir: data/parquet
 
-# Active modalities — face/voice/gait removed (not in this dataset)
 modalities:
-  iris: true
   fingerprint: true
+  iris_left: true
+  iris_right: true
   face: false
   voice: false
   gait: false
 
-# Feature dimensions after HOG extraction
 feature_dims:
-  iris: 1764           # HOG on 64x64 image
-  fingerprint: 1764    # HOG on 96x96 image
-  face: 512
-  voice: 128
-  gait: 64
+  fingerprint: 49152   # 128x128x3 flattened
+  iris_left: 4096      # 64x64x1 flattened
+  iris_right: 4096     # 64x64x1 flattened
 
 splits:
-  train: 0.70
-  val:   0.15
-  test:  0.15
+  train: 0.70    # ~36 subjects → ~360 rows
+  val:   0.10    # ~4-5 subjects → ~45 rows
+  test:  0.20
 
-num_workers: 0        # 0 on Windows (spawn limitation)
-pin_memory: false     # true only on CUDA GPU
+num_workers: 0
+pin_memory: false

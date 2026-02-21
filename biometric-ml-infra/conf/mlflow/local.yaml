@@ -1,5 +1,6 @@
 # MLflow tracking configuration
-tracking_uri: mlruns/        # Local: file path. Remote: http://mlflow-server:5000
+# SQLite backend (replaces deprecated file store — avoids FutureWarning from MLflow 2.20+)
+tracking_uri: sqlite:///mlflow.db   # Local SQLite. Remote: http://mlflow-server:5000
 experiment_name: biometric-recognition
 
 # Registered model name in MLflow Model Registry

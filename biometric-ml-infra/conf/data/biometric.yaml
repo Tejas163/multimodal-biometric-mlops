@@ -1,27 +1,25 @@
-# Data configuration for multimodal biometric dataset
-raw_dir: data/raw
+# Kaggle: ninadmehendale/multimodal-iris-fingerprint-biometric-data
+raw_dir: data/data
 processed_dir: data/processed
 parquet_dir: data/parquet
 
-# Which modalities to use — set to false to ablate
 modalities:
-  face: true        # 128-d FaceNet-style embedding or raw image
-  fingerprint: true # minutiae feature vector
-  voice: true       # MFCC feature vector
-  gait: false       # accelerometer time-series (optional)
+  fingerprint: true
+  iris_left: true
+  iris_right: true
+  face: false
+  voice: false
+  gait: false
 
-# Feature dimensions per modality (after per-modality encoder input)
 feature_dims:
-  face: 512
-  fingerprint: 256
-  voice: 128
-  gait: 64
+  fingerprint: 49152   # 128x128x3 flattened
+  iris_left: 4096      # 64x64x1 flattened
+  iris_right: 4096     # 64x64x1 flattened
 
-# Train / val / test split ratios (must sum to 1.0)
 splits:
-  train: 0.70
-  val: 0.15
-  test: 0.15
+  train: 0.80    # ~36 subjects → ~360 rows
+  val:   0.10    # ~4-5 subjects → ~45 rows
+  test:  0.10
 
-num_workers: 0           # DataLoader workers (use 0 on Windows to avoid spawn issues)
-pin_memory: false         # Set true only when training on GPU
+num_workers: 0
+pin_memory: false

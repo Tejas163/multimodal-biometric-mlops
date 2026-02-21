@@ -1,5 +1,6 @@
 # Core ML
 torch>=2.1.0
+torchvision>=0.16.0
 
 # MLOps / Experiment tracking
 mlflow>=2.10.0
@@ -9,8 +10,8 @@ hydra-core>=1.3.0
 omegaconf>=2.3.0
 
 # Data / storage
-pyarrow>=14.0.0
-numpy>=1.24.0
+pyarrow==14.0.2
+numpy>=1.24.0,<2.0.0
 
 # Parallel processing
 ray>=2.43.0

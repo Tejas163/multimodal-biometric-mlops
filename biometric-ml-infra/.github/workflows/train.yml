@@ -1,7 +1,6 @@
 name: Training Run
 
 on:
-  # Manually trigger from GitHub UI with optional param overrides
   workflow_dispatch:
     inputs:
       epochs:
@@ -16,8 +15,11 @@ on:
         description: "Fusion method: concat | attention | mean"
         required: false
         default: "concat"
+      num_subjects:
+        description: "Number of synthetic subjects to ingest"
+        required: false
+        default: "200"
 
-  # Auto-trigger on pushes to main that touch model or training code
   push:
     branches: [main]
     paths:
@@ -28,7 +30,7 @@ on:
 jobs:
   ingest-and-train:
     name: Ingest Data & Train Model
-    runs-on: ubuntu-latest   # Replace with self-hosted GPU runner for real workloads
+    runs-on: ubuntu-latest
 
     steps:
       - name: Checkout code
@@ -45,10 +47,10 @@ jobs:
           pip install --upgrade pip
           pip install -e ".[dev]"
 
-      - name: Run data ingestion (synthetic, 200 subjects)
+      - name: Run data ingestion
         run: |
           python scripts/ingest_data.py \
-            num_subjects=200 \
+            num_subjects=${{ github.event.inputs.num_subjects || '200' }} \
             data.parquet_dir=data/parquet
 
       - name: Verify Parquet files created
@@ -64,18 +66,18 @@ jobs:
       - name: Run training
         run: |
           python scripts/train.py \
-            training.epochs=${{ github.event.inputs.epochs || '5' }} \
+            training.epochs=${{ github.event.inputs.epochs || '50' }} \
             training.learning_rate=${{ github.event.inputs.learning_rate || '1e-3' }} \
             model.fusion.method=${{ github.event.inputs.fusion_method || 'concat' }} \
             data.parquet_dir=data/parquet \
-            mlflow.tracking_uri=mlruns/
+            mlflow.tracking_uri=sqlite:///mlflow.db
 
       - name: Upload MLflow artifacts
         uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: mlflow-runs
-          path: mlruns/
+          name: mlflow-database
+          path: mlflow.db
           retention-days: 30
 
       - name: Upload checkpoints
@@ -85,11 +87,3 @@ jobs:
           name: checkpoints
           path: checkpoints/
           retention-days: 14
-
-      # ── Azure deployment hook (uncomment when Azure ML is configured) ──
-      # - name: Register model in Azure ML
-      #   uses: azure/login@v1
-      #   with:
-      #     creds: ${{ secrets.AZURE_CREDENTIALS }}
-      # - name: Deploy to Azure ML endpoint
-      #   run: az ml model create --name BiometricFusionModel --path checkpoints/

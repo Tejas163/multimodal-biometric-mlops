@@ -39,7 +39,7 @@ from typing import Any
 
 import mlflow.pytorch
 import torch
-import torch.nn.functional as nn_func
+import torch.nn.functional as F  # noqa: N812
 from torch import Tensor
 
 from biometric_ml.data.schema import MODALITY_REGISTRY
@@ -165,7 +165,7 @@ class InferencePipeline:
         """
         inputs = self._validate_and_prepare(features)
         logits: Tensor = self.model(inputs)         # (1, num_classes)
-        probs: Tensor = nn_func.softmax(logits, dim=-1)   # (1, num_classes)
+        probs: Tensor = F.softmax(logits, dim=-1)   # (1, num_classes)
 
         top_probs, top_ids = probs[0].topk(min(self.top_k, probs.shape[-1]))
 
