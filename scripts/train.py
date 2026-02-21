@@ -44,7 +44,7 @@ from biometric_ml.utils.logging import setup_logging
 
 @hydra.main(config_path="../conf", config_name="config", version_base="1.3")
 def main(cfg: DictConfig) -> None:
-    setup_logging(level="INFO", json_format=False)
+    setup_logging(level="DEBUG", json_format=False)
     log = logging.getLogger(__name__)
     log.info("Starting training run")
     log.info("Seed: %d | Deterministic: %s", cfg.training.seed, cfg.training.deterministic)

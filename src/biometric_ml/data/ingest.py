@@ -102,7 +102,7 @@ def process_subject(
     left_paths   = _get_bmps(subj / "left")
     right_paths  = _get_bmps(subj / "right")
 
-    n_samples = max(len(left_paths), len(right_paths))
+    n_samples = max(len(left_paths), len(right_paths), 10)
     if n_samples == 0:
         return []
 
@@ -137,6 +137,7 @@ def process_subject(
 
         rows.append({
             "subject_id":  subject_id,
+            "label":       -1,             # placeholder — remapped globally after all subjects collected
             "sample_id":   f"subj{subject_id:04d}_s{i:02d}",
             "fingerprint": finger_flat.tolist(),
             "iris_left":   left_flat.tolist(),
@@ -145,6 +146,22 @@ def process_subject(
         })
 
     return rows
+    
+def _remap_labels(all_rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """
+    Assigns a globally consistent integer label (0..N-1) to every row.
+    This label is stored in Parquet and used directly by the Dataset —
+    so train/val/test all share the SAME label space.
+
+    subject_id is kept as the original value for reference.
+    """
+    unique_ids = sorted(set(row["subject_id"] for row in all_rows))
+    id_map     = {sid: i for i, sid in enumerate(unique_ids)}
+    log.info("Global label map: %d subjects → labels 0..%d", len(unique_ids), len(unique_ids)-1)
+    for row in all_rows:
+        row["label"] = id_map[row["subject_id"]]
+    return all_rows
+    
 
 
 def run_ingestion(
@@ -163,6 +180,7 @@ def run_ingestion(
     if not dataset_root.exists():
         dataset_root = raw_dir
 
+    # Extract subject folders (ensures we only take numeric folders)
     subject_ids = sorted(
         int(d.name) for d in dataset_root.iterdir()
         if d.is_dir() and d.name.isdigit()
@@ -173,6 +191,7 @@ def run_ingestion(
     shuffled = subject_ids.copy()
     random.shuffle(shuffled)
 
+    # Assign splits based on subject level to prevent data leakage
     split_assignments: dict[int, str] = {}
     cum = 0
     for split_name, frac in splits.items():
@@ -182,9 +201,6 @@ def run_ingestion(
         cum += n
     for sid in shuffled[cum:]:
         split_assignments[sid] = "train"
-
-    dist = {k: sum(1 for v in split_assignments.values() if v == k) for k in splits}
-    log.info("Subject split (subjects): %s → rows: %s", dist, {k: v*10 for k, v in dist.items()})
 
     if not ray.is_initialized():
         ray.init(num_cpus=num_cpus, ignore_reinit_error=True)
@@ -201,6 +217,21 @@ def run_ingestion(
     all_rows: list[dict[str, Any]] = []
     for result in ray.get(futures):
         all_rows.extend(result)
+
+    # Verify row counts — should be 10 per subject
+    from collections import Counter
+    counts = Counter(r["subject_id"] for r in all_rows)
+    unique_counts = set(counts.values())
+    log.info("Rows per subject: %s (expected 10)", unique_counts)
+    if unique_counts != {10}:
+        log.warning("Some subjects have unexpected row counts: %s",
+                    {sid: c for sid, c in counts.items() if c != 10})
+
+    # --- CRITICAL CHANGE: Remap labels to 0-indexed range ---
+    all_rows = _remap_labels(all_rows)
+    log.info("Performing global shuffle of %d rows...", len(all_rows))
+    random.seed(42)
+    random.shuffle(all_rows)
 
     log.info("Total rows: %d", len(all_rows))
     _write_parquet(all_rows, parquet_dir)

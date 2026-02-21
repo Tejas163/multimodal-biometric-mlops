@@ -23,6 +23,7 @@ IRIS_SHAPE        = (1,   64,  64)    # CHW for PyTorch
 
 FUSED_SCHEMA = pa.schema([
     pa.field("subject_id",      pa.int32(),  nullable=False),
+    pa.field("label",           pa.int32(),  nullable=False),  # global 0-indexed label (consistent across all splits)
     pa.field("sample_id",       pa.string(), nullable=False),
     pa.field("fingerprint",     pa.list_(pa.float32(), FINGERPRINT_DIM), nullable=False),
     pa.field("iris_left",       pa.list_(pa.float32(), IRIS_LEFT_DIM),   nullable=False),

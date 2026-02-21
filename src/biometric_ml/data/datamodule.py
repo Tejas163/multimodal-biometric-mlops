@@ -26,7 +26,7 @@ class DataConfig:
 
     parquet_dir: str
     active_modalities: list[str] = field(default_factory=lambda: ["face", "fingerprint", "voice"])
-    batch_size: int = 64
+    batch_size: int = 32
     num_workers: int = 4
     pin_memory: bool = True
     balance_classes: bool = False  # Use WeightedRandomSampler to handle imbalance
@@ -49,7 +49,7 @@ class BiometricDataModule:
         parquet_dir = Path(cfg.parquet_dir)
 
         self.train_ds = BiometricDataset(
-            parquet_dir / "train.parquet", cfg.active_modalities
+            parquet_dir / "train.parquet", cfg.active_modalities,transform=cfg.train_transforms
         )
         self.val_ds = BiometricDataset(
             parquet_dir / "val.parquet", cfg.active_modalities
@@ -75,7 +75,7 @@ class BiometricDataModule:
             num_workers=self.cfg.num_workers,
             pin_memory=self.cfg.pin_memory,
             persistent_workers=False,
-            drop_last=True,            # Avoid partial batches in training
+            drop_last=False,           # Keep all samples — dataset too small to drop any
         )
 
     def val_dataloader(self) -> DataLoader:

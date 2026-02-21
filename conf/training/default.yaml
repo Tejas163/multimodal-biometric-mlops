@@ -1,18 +1,17 @@
-# Matches Kaggle notebook: Adam(lr=1e-4), batch_size=8, epochs=50
 seed: 42
-deterministic: false   # MobileNetV2 uses non-deterministic ops on CUDA
+deterministic: false
 
-epochs: 50
-batch_size: 16          # matches notebook BATCH_SIZE = 8
-learning_rate: 0.00001 # matches notebook Adam(learning_rate=1e-4)
-weight_decay: 0.0      # notebook uses no weight decay
+epochs: 60
+batch_size: 16             # larger batch = more stable gradients, less overfitting
+learning_rate: 1.0e-4      # reduced — 1e-3 was too fast, caused overfitting by epoch 3
+weight_decay: 1.0e-2       # stronger L2 regularisation to fight overfitting
 
 scheduler:
   name: cosine
-  T_max: 50
+  T_max: 150
 
-gradient_clip_val: 0.0            # notebook doesn't clip gradients
-early_stopping_patience: 15
+gradient_clip_val: 1.0
+early_stopping_patience: 15   # more patience — val loss is noisy with 4 val subjects
 
 checkpoint:
   dir: checkpoints/

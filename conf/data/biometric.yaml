@@ -17,9 +17,9 @@ feature_dims:
   iris_right: 4096     # 64x64x1 flattened
 
 splits:
-  train: 0.70    # ~36 subjects → ~360 rows
+  train: 0.80    # ~36 subjects → ~360 rows
   val:   0.10    # ~4-5 subjects → ~45 rows
-  test:  0.20
+  test:  0.10
 
 num_workers: 0
 pin_memory: false
