@@ -99,23 +99,17 @@ class Trainer:
             class_weights = class_weights.to(device)
         self.criterion = nn.CrossEntropyLoss(label_smoothing=0.05, weight=class_weights)
 
-        # Separate parameter groups
-        backbone_params = []
-        new_params = []
-        for name, param in model.named_parameters():
-            if param.requires_grad:
-                if 'fingerprint_features' in name:
-                    backbone_params.append(param)
-                else:
-                    new_params.append(param)
+        # Single optimizer — all params trained at same LR
+        # (backbone_params split was broken: looked for 'fingerprint_features' 
+        #  but model uses 'fingerprint_branch')
+        all_params = [p for p in model.parameters() if p.requires_grad]
+        log.info("Trainable param tensors: %d", len(all_params))
 
-        log.info("Backbone trainable params: %d", len(backbone_params))
-        log.info("New layers trainable params: %d", len(new_params))
-
-        self.optimizer = Adam([
-            {'params': backbone_params, 'lr': t.backbone_lr},
-            {'params': new_params, 'lr': t.learning_rate}
-        ], weight_decay=t.weight_decay)
+        self.optimizer = Adam(
+            all_params,
+            lr=t.learning_rate,
+            weight_decay=t.weight_decay
+        )
 
         self.scheduler = CosineAnnealingLR(self.optimizer, T_max=t.epochs, eta_min=1e-6)
         self.stopper = EarlyStopper(t.early_stopping_patience)
@@ -226,46 +220,30 @@ class Trainer:
     def _val(self):
         self.model.eval()
         total_loss = correct_1 = correct_5 = num_samples = 0
-        all_preds = []
-        all_labels = []
+        all_preds, all_labels = [], []
 
-        for batch_idx, batch in enumerate(self.val_loader):
+        for batch in self.val_loader:
             inp, lbl = self._unpack(batch)
             logits = self.model(inp)
-
-            # Debug first batch
-            if num_samples == 0:
-                preds = logits.argmax(dim=-1)
-                print(f"\n[DEBUG] Val Batch {batch_idx}:")
-                print(f"  Labels: {lbl[:5].tolist()}")
-                print(f"  Preds:  {preds[:5].tolist()}")
-                print(f"  Logits range: [{logits.min():.2f}, {logits.max():.2f}]")
-                print(f"  Logits mean: {logits.mean():.2f}, std: {logits.std():.2f}")
-                print(f"  Unique predictions: {preds.unique().numel()} / {logits.size(-1)}")
-
-            loss = self.criterion(logits, lbl)
-            total_loss += loss.item()
-
+            total_loss += self.criterion(logits, lbl).item()
             preds = logits.argmax(dim=-1)
             all_preds.extend(preds.cpu().tolist())
             all_labels.extend(lbl.cpu().tolist())
-
             correct_1 += (preds == lbl).sum().item()
             k = min(5, logits.size(-1))
-            top5_preds = logits.topk(k, dim=-1).indices
-            correct_5 += (top5_preds == lbl.unsqueeze(1)).any(dim=1).sum().item()
+            correct_5 += (logits.topk(k, -1).indices == lbl.unsqueeze(1)).any(1).sum().item()
             num_samples += lbl.size(0)
 
-        # Print distribution
-        pred_dist = Counter(all_preds)
-        label_dist = Counter(all_labels)
-        print(f"\n[DEBUG] Top 5 predicted classes: {pred_dist.most_common(5)}")
-        print(f"[DEBUG] Top 5 actual classes: {label_dist.most_common(5)}")
+        # Show which subjects the model gets right
+        correct_subjects = [l for l, p in zip(all_labels, all_preds) if l == p]
+        log.debug("Val correct subjects: %s / %d total", sorted(correct_subjects), num_samples)
+        if correct_1 == 0:
+            # Show closest misses (label in top-3 preds)
+            near_misses = sum(1 for l, p in zip(all_labels, all_preds) if abs(l - p) <= 2)
+            log.debug("Near misses (|label-pred|<=2): %d", near_misses)
 
-        avg_loss = total_loss / len(self.val_loader)
-        top1_acc = correct_1 / num_samples
-        top5_acc = correct_5 / num_samples
-        return avg_loss, top1_acc, top5_acc
+        avg_loss = total_loss / max(len(self.val_loader), 1)
+        return avg_loss, correct_1 / max(num_samples, 1), correct_5 / max(num_samples, 1)
 
     def _unpack(self, batch):
         lbl = batch["label"].to(self.device).long()
