@@ -24,7 +24,7 @@ if dataset_root.exists():
         print(f"\nSubject {s.name} structure:")
         for sub in sorted(s.iterdir()):
             if sub.is_dir():
-                bmps = list(sub.glob("*.bmp")) + list(sub.glob("*.BMP"))
+                bmps = list({p.name.lower(): p for p in sub.iterdir() if p.suffix.lower() == ".bmp"}.values())
                 print(f"  {sub.name}/ → {len(bmps)} BMP files")
 
 print("\n" + "=" * 60)

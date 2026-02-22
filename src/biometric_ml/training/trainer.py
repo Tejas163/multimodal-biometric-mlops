@@ -1,32 +1,27 @@
-"""
-trainer.py — fixed for overfitting on small biometric dataset.
-
-Key changes vs previous:
-  - Mixup augmentation added — most effective regulariser for tiny datasets
-  - Augmentation strength reduced (was too aggressive)
-  - Model registered only at end of training (not every best epoch — too slow)
-  - Debug prints removed
-"""
+"""trainer.py — With class weights, augmentation for both modalities."""
 
 from __future__ import annotations
 
 import heapq
 import logging
 import time
+from collections import Counter
 from pathlib import Path
-from typing import Any
 
 import mlflow
 import mlflow.pytorch
+import numpy as np
+import pyarrow.parquet as pq
 import torch
 import torch.nn as nn
-import torch.nn.functional as F
 from omegaconf import DictConfig, OmegaConf
 from torch import Tensor
 from torch.optim import Adam
 from torch.optim.lr_scheduler import CosineAnnealingLR
-from torch.utils.data import DataLoader
+from torch.utils.data import DataLoader, Subset
 
+from biometric_ml.data.datamodule import BiometricDataModule, DataConfig
+from biometric_ml.data.dataset import BiometricDataset
 from biometric_ml.models.fusion import BiometricFusionModel
 from biometric_ml.training.reproducibility import seed_everything
 
@@ -34,279 +29,343 @@ log = logging.getLogger(__name__)
 
 
 class EarlyStopper:
-    def __init__(self, patience: int) -> None:
-        self.patience  = patience
-        self.counter   = 0
-        self.best_loss = float("inf")
+    def __init__(self, patience):
+        self.patience = patience
+        self.counter = 0
+        self.best = float("inf")
 
-    def step(self, val_loss: float) -> bool:
-        if val_loss < self.best_loss:
-            self.best_loss = val_loss
-            self.counter   = 0
+    def step(self, val_loss):
+        if val_loss < self.best:
+            self.best = val_loss
+            self.counter = 0
             return False
         self.counter += 1
         return self.counter >= self.patience
 
 
 class CheckpointManager:
-    def __init__(self, checkpoint_dir: Path, save_top_k: int) -> None:
-        self.checkpoint_dir = checkpoint_dir
-        self.checkpoint_dir.mkdir(parents=True, exist_ok=True)
-        self.save_top_k = save_top_k
-        self._heap: list[tuple[float, str]] = []
+    def __init__(self, d: Path, k: int):
+        d.mkdir(parents=True, exist_ok=True)
+        self.d = d
+        self.k = k
+        self.heap = []
 
-    def save(self, model, optimizer, epoch, val_loss) -> Path:
-        path = self.checkpoint_dir / f"epoch_{epoch:04d}_loss_{val_loss:.4f}.pt"
+    def save(self, model, opt, epoch, loss) -> Path:
+        p = self.d / f"epoch_{epoch:04d}_loss_{loss:.4f}.pt"
         torch.save({
             "epoch": epoch,
             "model_state_dict": model.state_dict(),
-            "optimizer_state_dict": optimizer.state_dict(),
-            "val_loss": val_loss,
-        }, path)
-        heapq.heappush(self._heap, (-val_loss, str(path)))
-        if len(self._heap) > self.save_top_k:
-            _, worst = heapq.heappop(self._heap)
-            Path(worst).unlink(missing_ok=True)
-        return path
+            "optimizer_state_dict": opt.state_dict(),
+            "val_loss": loss
+        }, p)
+        heapq.heappush(self.heap, (-loss, str(p)))
+        if len(self.heap) > self.k:
+            _, w = heapq.heappop(self.heap)
+            Path(w).unlink(missing_ok=True)
+        return p
 
 
-def mixup(x: Tensor, y: Tensor, alpha: float = 0.2) -> tuple[Tensor, Tensor, Tensor, float]:
-    """
-    Mixup augmentation — blends two random samples in each batch.
-    Extremely effective for small datasets: creates infinite virtual training examples.
-    alpha=0.4 is standard for classification tasks.
-    """
-    lam   = float(torch.distributions.Beta(alpha, alpha).sample())
-    idx   = torch.randperm(x.size(0), device=x.device)
-    x_mix = lam * x + (1 - lam) * x[idx]
-    return x_mix, y, y[idx], lam
-
-
-def mixup_loss(criterion, logits, y_a, y_b, lam):
-    return lam * criterion(logits, y_a) + (1 - lam) * criterion(logits, y_b)
-
-
-def _augment(t: Tensor, flip_prob: float = 0.5, jitter: float = 0.30) -> Tensor:
-    """Lightweight tensor augmentation — flip + brightness."""
-    if torch.rand(1).item() < flip_prob:
+def _augment_image(t: Tensor, flip_prob=0.5, rotate_deg=5, jitter=0.05) -> Tensor:
+    """Simple augmentation for both fingerprint and iris."""
+    # Random horizontal flip
+    if torch.rand(1) < flip_prob:
         t = t.flip(-1)
-    factor = 1.0 + (torch.rand(1).item() - 0.5) * jitter
-    return (t * factor).clamp(0.0, 1.0)
+    # Small random rotation (simulated by affine grid – simplified)
+    # For simplicity, we just add jitter and leave rotation for now.
+    # Intensity jitter
+    t = t * (1 + (torch.rand(1) - 0.5) * jitter)
+    return t.clamp(0, 1)
 
 
 class Trainer:
-    def __init__(self, model: BiometricFusionModel, cfg: DictConfig,
-                 train_loader: DataLoader, val_loader: DataLoader,
-                 device: torch.device) -> None:
-        self.model        = model.to(device)
-        self.cfg          = cfg
+    def __init__(self, model, cfg, train_loader, val_loader, device, class_weights=None):
+        self.model = model.to(device)
+        self.cfg = cfg
         self.train_loader = train_loader
-        self.val_loader   = val_loader
-        self.device       = device
-
+        self.val_loader = val_loader
+        self.device = device
         t = cfg.training
-        self.criterion = nn.CrossEntropyLoss(label_smoothing=0.1)
-        trainable = [p for p in model.parameters() if p.requires_grad]
-        log.info("Trainable param tensors: %d", len(trainable))
 
-        self.optimizer = self._init_optimizer()        
-        self.scheduler    = CosineAnnealingLR(self.optimizer, T_max=t.epochs, eta_min=1e-5)
-        self.stopper      = EarlyStopper(patience=t.early_stopping_patience)
-        self.ckpt_manager = CheckpointManager(Path(t.checkpoint.dir), t.checkpoint.save_top_k)
-        self.grad_clip    = t.gradient_clip_val
-    
-    def _init_optimizer(self):
-        # We re-init the optimizer when we unfreeze to include MobileNet weights
-        return Adam(
-            filter(lambda p: p.requires_grad, self.model.parameters()),
-            lr=1e-4,
-            weight_decay=1e-3 # Higher weight decay for small data
+        # Loss with optional class weights
+        if class_weights is not None:
+            class_weights = class_weights.to(device)
+        self.criterion = nn.CrossEntropyLoss(
+            label_smoothing=0.2,
+            weight=class_weights
         )
 
-    def fit(self) -> None:
+        # All trainable parameters are from iris branch and classifier
+        trainable_params = [p for p in model.parameters() if p.requires_grad]
+        log.info("Trainable parameters: %d tensors, total elements = %d",
+                 len(trainable_params),
+                 sum(p.numel() for p in trainable_params))
+
+        self.optimizer = Adam(trainable_params, lr=t.learning_rate, weight_decay=t.weight_decay)
+        self.scheduler = CosineAnnealingLR(self.optimizer, T_max=t.epochs, eta_min=1e-6)
+        self.stopper = EarlyStopper(t.early_stopping_patience)
+        self.ckpt_manager = CheckpointManager(Path(t.checkpoint.dir), t.checkpoint.save_top_k)
+        self.grad_clip = t.gradient_clip_val
+
+    def fit(self):
         mlflow.set_tracking_uri(self.cfg.mlflow.tracking_uri)
         mlflow.set_experiment(self.cfg.mlflow.experiment_name)
 
         with mlflow.start_run():
             self._log_params()
-            best_val_loss = float("inf")
-            best_ckpt     = None
+            best_loss = float("inf")
+            best_ckpt = None
 
             try:
                 for epoch in range(1, self.cfg.training.epochs + 1):
-                   warmup_epochs = 5
-                   if epoch <= warmup_epochs:
-                       base_lr = self.cfg.training.learning_rate
-                       current_lr=base_lr * (epoch / warmup_epochs)
-                       for param_group in self.optimizer.param_groups:
-                           param_group['lr'] = current_lr
-                       log.info(f"Warmup Phase: Setting LR to {current_lr:.2e}")
-                   t0         = time.perf_counter()
-                   train_loss = self._train_epoch()
-                   val_loss, top1, top5 = self._val_epoch()
-                   elapsed    = time.perf_counter() - t0
-                   current_lr = self.scheduler.get_last_lr()[0]
-                   self.scheduler.step()
+                    t0 = time.perf_counter()
+                    tr_loss, grad_norm = self._train()
+                    val_loss, top1, top5 = self._val()
+                    elapsed = time.perf_counter() - t0
+                    lr = self.optimizer.param_groups[0]["lr"]
 
-                   mlflow.log_metrics({
-                        "train/loss":        train_loss,
-                        "val/loss":          val_loss,
-                        "val/accuracy_top1": top1,
-                        "val/accuracy_top5": top5,
-                        "lr":                current_lr,
-                        "epoch_time_sec":    elapsed,
+                    self.scheduler.step()
+
+                    mlflow.log_metrics({
+                        "train/loss": tr_loss,
+                        "val/loss": val_loss,
+                        "val/top1": top1,
+                        "val/top5": top5,
+                        "lr": lr,
+                        "grad_norm": grad_norm
                     }, step=epoch)
 
-                   log.info(
-                        "Epoch %03d | train=%.4f | val=%.4f | top1=%.3f | top5=%.3f | lr=%.2e | %.1fs",
-                        epoch, train_loss, val_loss, top1, top5, current_lr, elapsed,
+                    log.info(
+                        "Epoch %03d | train=%.4f | val=%.4f | "
+                        "top1=%.3f | top5=%.3f | lr=%.2e | grad=%.2e | %.1fs",
+                        epoch, tr_loss, val_loss, top1, top5, lr, grad_norm, elapsed
                     )
 
-                   if val_loss < best_val_loss:
-                       best_val_loss = val_loss
-                       best_ckpt = self.ckpt_manager.save(
+                    if val_loss < best_loss:
+                        best_loss = val_loss
+                        best_ckpt = self.ckpt_manager.save(
                             self.model, self.optimizer, epoch, val_loss
-                            )
-                       mlflow.log_artifact(str(best_ckpt), artifact_path="checkpoints")
+                        )
 
-                   if self.stopper.step(val_loss):
-                       log.info("Early stopping at epoch %d", epoch)
-                       break
+                    if self.stopper.step(val_loss):
+                        log.info("Early stopping at epoch %d", epoch)
+                        break
 
             except KeyboardInterrupt:
-                log.warning("Interrupted — saving emergency checkpoint")
-                self.ckpt_manager.save(self.model, self.optimizer, -1, float("inf"))
+                log.warning("Interrupted")
 
-            # Register model once at end — not every best epoch (saves time)
-            if best_ckpt:
-                log.info("Training complete. Registering best weights to MLflow...")
-                # Ensure we are registering the BEST weights, not just the last epoch's weights
-                # The ckpt_manager usually handles the path; load them back into the model
-                # self.model.load_state_dict(torch.load(best_ckpt)) 
-                self._register_model()
+            if self.cfg.mlflow.log_model_on_best and best_ckpt:
+                mlflow.pytorch.log_model(
+                    self.model,
+                    artifact_path="model",
+                    registered_model_name=self.cfg.mlflow.registered_model_name
+                )
+            log.info("Done. Best val loss: %.4f", best_loss)
 
-            log.info("Training done. Best val loss: %.4f", best_val_loss)
-
-    def _train_epoch(self) -> float:
+    def _train(self):
         self.model.train()
-        total = 0.0
+        # Fingerprint backbone is frozen and in eval mode already (from fusion.py)
+        total_loss = 0.0
+        total_grad_norm = 0.0
+        num_batches = 0
+
         for batch in self.train_loader:
-            inputs, labels = self._unpack(batch)
+            inp, lbl = self._unpack(batch)
 
-            # Augment each modality
-            fp    = _augment(inputs["fingerprint"], jitter=0.3)
-            left  = _augment(inputs["iris_left"],   jitter=0.3)
-            right = _augment(inputs["iris_right"],  jitter=0.3)
-
-            # Mixup on fingerprint (most informative modality)
-            fp_mix, y_a, y_b, lam = mixup(fp, labels, alpha=0.2)
-            inputs_aug = {"fingerprint": fp_mix, "iris_left": left, "iris_right": right}
+            # Apply augmentation to both modalities
+            inp["fingerprint"] = _augment_image(inp["fingerprint"])
+            inp["iris_left"] = _augment_image(inp["iris_left"])
+            inp["iris_right"] = _augment_image(inp["iris_right"])
 
             self.optimizer.zero_grad(set_to_none=True)
-            logits = self.model(inputs_aug)
-            loss   = mixup_loss(self.criterion, logits, y_a, y_b, lam)
+
+            logits = self.model(inp)
+            loss = self.criterion(logits, lbl)
             loss.backward()
+
             if self.grad_clip > 0:
                 nn.utils.clip_grad_norm_(self.model.parameters(), self.grad_clip)
+
+            # Compute total gradient norm for monitoring
+            total_norm = 0.0
+            for p in self.model.parameters():
+                if p.grad is not None:
+                    param_norm = p.grad.data.norm(2)
+                    total_norm += param_norm.item() ** 2
+            total_norm = total_norm ** 0.5
+            total_grad_norm += total_norm
+
             self.optimizer.step()
-            total += loss.item()
-        return total / max(len(self.train_loader), 1)
+            total_loss += loss.item()
+            num_batches += 1
+
+        return total_loss / num_batches, total_grad_norm / num_batches
 
     @torch.no_grad()
-    def _val_epoch(self) -> tuple[float, float, float]:
+    def _val(self):
         self.model.eval()
-        total_loss = correct1 = correct5 = total = 0
+        total_loss = correct_1 = correct_5 = num_samples = 0
+        all_preds = []
+        all_labels = []
 
-        for batch in self.val_loader:
-            inputs, labels = self._unpack(batch)
-            logits         = self.model(inputs)
-            total_loss    += self.criterion(logits, labels).item()
+        for batch_idx, batch in enumerate(self.val_loader):
+            inp, lbl = self._unpack(batch)
+            logits = self.model(inp)
+
+            # Debug first batch
+            if num_samples == 0:
+                preds = logits.argmax(dim=-1)
+                print(f"\n[DEBUG] Val Batch {batch_idx}:")
+                print(f"  Labels: {lbl[:5].tolist()}")
+                print(f"  Preds:  {preds[:5].tolist()}")
+                print(f"  Logits range: [{logits.min():.2f}, {logits.max():.2f}]")
+                print(f"  Logits mean: {logits.mean():.2f}, std: {logits.std():.2f}")
+                print(f"  Unique predictions: {preds.unique().numel()} / {logits.size(-1)}")
+
+            loss = self.criterion(logits, lbl)
+            total_loss += loss.item()
 
             preds = logits.argmax(dim=-1)
-            log.debug("labels=%s preds=%s", labels[:5].tolist(), preds[:5].tolist())
-            correct1 += (preds == labels).sum().item()
-            k = min(5, logits.size(-1))
-            top_k = logits.topk(k, dim=-1).indices
-            correct5 += (top_k == labels.unsqueeze(1)).any(dim=1).sum().item()
-            total    += labels.size(0)
+            all_preds.extend(preds.cpu().tolist())
+            all_labels.extend(lbl.cpu().tolist())
 
-        n    = max(len(self.val_loader), 1)
-        top1 = correct1 / total if total > 0 else 0.0
-        top5 = correct5 / total if total > 0 else 0.0
-        return total_loss / n, top1, top5
+            correct_1 += (preds == lbl).sum().item()
+            k = min(5, logits.size(-1))
+            top5_preds = logits.topk(k, dim=-1).indices
+            correct_5 += (top5_preds == lbl.unsqueeze(1)).any(dim=1).sum().item()
+            num_samples += lbl.size(0)
+
+        # Print distribution
+        pred_dist = Counter(all_preds)
+        label_dist = Counter(all_labels)
+        print(f"\n[DEBUG] Top 5 predicted classes: {pred_dist.most_common(5)}")
+        print(f"[DEBUG] Top 5 actual classes: {label_dist.most_common(5)}")
+
+        avg_loss = total_loss / len(self.val_loader)
+        top1_acc = correct_1 / num_samples
+        top5_acc = correct_5 / num_samples
+        return avg_loss, top1_acc, top5_acc
 
     def _unpack(self, batch):
-        labels = batch["label"].to(self.device).long()
-        inputs = {}
-        for k, v in batch.items():
-            if k != "label" and isinstance(v, Tensor):
-                # Move to device and ensure float32
-                t = v.to(self.device).float()
-            
-                # If data is in [0, 255] range, scale to [0, 1]
-                if t.max() > 1.0:
-                    t = t / 255.0
-                inputs[k] = t
-        return inputs, labels
+        lbl = batch["label"].to(self.device).long()
+        inp = {
+            k: v.to(self.device).float()
+            for k, v in batch.items()
+            if k != "label"
+        }
+        return inp, lbl
 
-    def _log_params(self) -> None:
+    def _log_params(self):
         flat = OmegaConf.to_container(self.cfg, resolve=True, throw_on_missing=True)
-        def _flatten(d, prefix=""):
+
+        def flatten(d, prefix=""):
             out = {}
             for k, v in d.items():
-                key = f"{prefix}{k}" if prefix else k
-                out.update(_flatten(v, f"{key}.") if isinstance(v, dict) else {key: v})
+                if isinstance(v, dict):
+                    out.update(flatten(v, f"{prefix}{k}."))
+                else:
+                    out[f"{prefix}{k}"] = v
             return out
-        mlflow.log_params(_flatten(flat))
-        if self.cfg.mlflow.log_config_snapshot:
-            p = Path("outputs/config_snapshot.yaml")
-            p.parent.mkdir(exist_ok=True)
-            OmegaConf.save(self.cfg, p)
-            mlflow.log_artifact(str(p), artifact_path="config")
 
-    def _register_model(self) -> None:
-        mlflow.pytorch.log_model(
-            pytorch_model=self.model,
-            artifact_path="model",
-            registered_model_name=self.cfg.mlflow.registered_model_name,
-        )
-        log.info("Model registered as '%s'", self.cfg.mlflow.registered_model_name)
+        mlflow.log_params(flatten(flat))
 
 
+# ----------------------------------------------------------------------
+# Helper to compute class weights
+# ----------------------------------------------------------------------
+def compute_class_weights(dataset, num_classes):
+    """
+    Compute class weights for balanced loss.
+    For classes with zero samples, weight is set to 1.0.
+    For present classes, weight = total_samples / (num_classes * class_count).
+    """
+    labels = [dataset[i]["label"] for i in range(len(dataset))]
+    counts = torch.bincount(torch.tensor(labels), minlength=num_classes).float()
+    total = counts.sum()
+    weights = torch.ones(num_classes, dtype=torch.float32)  # default 1.0 for missing classes
+    nonzero = counts > 0
+    weights[nonzero] = total / (num_classes * counts[nonzero])
+    return weights
+
+
+# ----------------------------------------------------------------------
+# Top‑level training functions
+# ----------------------------------------------------------------------
 def build_and_fit(cfg: DictConfig) -> None:
-    from biometric_ml.data.datamodule import BiometricDataModule, DataConfig
+    """Regular training with fixed train/val/test splits."""
+    seed_everything(cfg.training.seed, cfg.training.deterministic)
 
-    seed_everything(cfg.training.seed, deterministic=cfg.training.deterministic)
-
-    data_cfg = DataConfig(
+    dm = BiometricDataModule(DataConfig(
         parquet_dir=cfg.data.parquet_dir,
         active_modalities=["fingerprint", "iris_left", "iris_right"],
         batch_size=cfg.training.batch_size,
         num_workers=cfg.data.num_workers,
         pin_memory=cfg.data.pin_memory,
         train_transforms=None,
-    )
-    dm          = BiometricDataModule(data_cfg)
+    ))
+
     num_classes = dm.num_classes
     log.info("Subjects (classes): %d", num_classes)
 
-    model = BiometricFusionModel(num_classes=num_classes, freeze_mobilenet=True)
+    # Get training dataset from the dataloader (safe, always indexable)
+    train_loader = dm.train_dataloader()
+    train_dataset = train_loader.dataset
+    class_weights = compute_class_weights(train_dataset, num_classes)
+    log.info("Class weights (first 10): %s", class_weights[:10].tolist())
+
+    model = BiometricFusionModel(num_classes=num_classes)
 
     trainable = sum(p.numel() for p in model.parameters() if p.requires_grad)
-    total     = sum(p.numel() for p in model.parameters())
-
-    # Check if actually frozen
-    is_frozen = not next(model.fingerprint_branch.parameters()).requires_grad
-    status_str = "MobileNet frozen" if is_frozen else "Full Finetuning"
-
-    log.info("Parameters — trainable: %d / total: %d (%s)", trainable, total, status_str)
+    total = sum(p.numel() for p in model.parameters())
+    log.info("Params trainable=%d / total=%d (%.1f%% frozen)",
+             trainable, total, 100 * (1 - trainable/total))
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    log.info("Device: %s", device)
+    model = model.to(device)
 
-    Trainer(
-        model=model, cfg=cfg,
-        train_loader=dm.train_dataloader(),
-        val_loader=dm.val_dataloader(),
-        device=device,
-    ).fit()
+    # Sanity check
+    with torch.no_grad():
+        batch = next(iter(dm.train_dataloader()))
+        inp = {k: v[:4].to(device) for k, v in batch.items() if k != "label"}
+        lbl = batch["label"][:4]
+
+        out = model(inp)
+        preds = out.argmax(dim=-1)
+
+        log.info("Sanity check — labels: %s, preds: %s", lbl.tolist(), preds.tolist())
+        unique_preds = preds.unique().numel()
+        if unique_preds == 1:
+            log.error("CRITICAL: Model predictions collapsed to single class!")
+        else:
+            log.info("Sanity check passed: %d unique predictions", unique_preds)
+
+    Trainer(model, cfg, dm.train_dataloader(), dm.val_dataloader(), device,
+            class_weights=class_weights).fit()
+
+def build_and_fit_cv(cfg: DictConfig) -> None:
+    """5-fold cross-validation training."""
+    seed_everything(cfg.training.seed, cfg.training.deterministic)
+
+    parquet_dir = Path(cfg.data.parquet_dir)
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+    folds = _create_folds(parquet_dir, n_folds=5, seed=cfg.training.seed)
+
+    base_dataset = BiometricDataset(
+        parquet_dir / "train.parquet",
+        ["fingerprint", "iris_left", "iris_right"]
+    )
+
+    num_classes = base_dataset.num_classes
+    log.info("Total subjects (classes): %d", num_classes)
+
+    output_dir = Path(cfg.training.checkpoint.dir) / "cv_folds"
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    all_metrics = []
+    for fold_config in folds:
+        metrics = _train_fold(
+            fold_config, base_dataset, cfg, device, output_dir, num_classes
+        )
+        all_metrics.append(metrics)
+
+    _log_cv_summary(all_metrics)

@@ -1,4 +1,3 @@
-# Kaggle: ninadmehendale/multimodal-iris-fingerprint-biometric-data
 raw_dir: data/data
 processed_dir: data/processed
 parquet_dir: data/parquet
@@ -12,13 +11,15 @@ modalities:
   gait: false
 
 feature_dims:
-  fingerprint: 49152   # 128x128x3 flattened
-  iris_left: 4096      # 64x64x1 flattened
-  iris_right: 4096     # 64x64x1 flattened
+  fingerprint: 49152
+  iris_left: 4096
+  iris_right: 4096
 
+# 80/10/10 split by subject = 36 train / 4-5 val / 4-5 test subjects
+# With 5 samples each: ~180 train / ~20 val / ~20 test rows
 splits:
-  train: 0.80    # ~36 subjects → ~360 rows
-  val:   0.10    # ~4-5 subjects → ~45 rows
+  train: 0.80
+  val:   0.10
   test:  0.10
 
 num_workers: 0
