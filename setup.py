@@ -9,18 +9,16 @@ setup(
     package_dir={"": "src"},
     packages=find_packages(where="src"),
     install_requires=[
-        # Core ML
         "torch>=2.1.0",
-        # MLOps
+        "torchvision>=0.16.0",  # needed even if not used — transitive dep of mlflow
         "mlflow>=2.10.0",
-        # Config
         "hydra-core>=1.3.0",
         "omegaconf>=2.3.0",
-        # Data
         "pyarrow>=14.0.0",
-        "numpy>=1.24.0",
-        # Parallelism
+        "numpy>=1.24.0,<2.0.0",
+        "Pillow>=10.0.0",
         "ray>=2.43.0",
+        "python-dotenv>=1.0.0",
     ],
     extras_require={
         "dev": [

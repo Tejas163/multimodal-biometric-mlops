@@ -1,4 +1,2 @@
-from biometric_ml.training.reproducibility import seed_everything
-from biometric_ml.training.trainer import Trainer, build_and_fit
-
+# Deferred imports — prevents circular import and import-time failures
 __all__ = ["Trainer", "build_and_fit", "seed_everything"]

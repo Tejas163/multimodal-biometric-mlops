@@ -1,28 +1,50 @@
 """
-fusion.py — Frozen MobileNet, linear classifier only.
+fusion.py — Tiny trainable CNN for fingerprint + iris.
 """
 from __future__ import annotations
 
 import torch
 import torch.nn as nn
 from torch import Tensor
-from torchvision import models
-from torchvision.models import MobileNet_V2_Weights
 
 
 class IrisBranch(nn.Module):
-    def __init__(self, output_dim: int = 32) -> None:
+    def __init__(self, out_dim: int = 32):
         super().__init__()
         self.net = nn.Sequential(
-            nn.Conv2d(1, 32, kernel_size=5, stride=2, padding=2),
-            nn.BatchNorm2d(32),
+            nn.Conv2d(1, 16, kernel_size=5, stride=2, padding=2),
+            nn.BatchNorm2d(16),
             nn.ReLU(),
-            nn.Conv2d(32, 64, kernel_size=3, stride=2, padding=1),
-            nn.BatchNorm2d(64),
+            nn.Conv2d(16, 32, kernel_size=3, stride=2, padding=1),
+            nn.BatchNorm2d(32),
             nn.ReLU(),
             nn.AdaptiveAvgPool2d(1),
             nn.Flatten(),
-            nn.Linear(64, output_dim),
+            nn.Linear(32, out_dim),
+            nn.ReLU(),
+        )
+
+    def forward(self, x: Tensor) -> Tensor:
+        return self.net(x)
+
+
+class FingerprintBranch(nn.Module):
+    def __init__(self, out_dim: int = 64):
+        super().__init__()
+        # Input: (B, 3, 128, 128)
+        self.net = nn.Sequential(
+            nn.Conv2d(3, 32, kernel_size=7, stride=2, padding=3),
+            nn.BatchNorm2d(32),
+            nn.ReLU(),
+            nn.Conv2d(32, 64, kernel_size=5, stride=2, padding=2),
+            nn.BatchNorm2d(64),
+            nn.ReLU(),
+            nn.Conv2d(64, 128, kernel_size=3, stride=2, padding=1),
+            nn.BatchNorm2d(128),
+            nn.ReLU(),
+            nn.AdaptiveAvgPool2d(1),
+            nn.Flatten(),
+            nn.Linear(128, out_dim),
             nn.ReLU(),
         )
 
@@ -31,68 +53,38 @@ class IrisBranch(nn.Module):
 
 
 class BiometricFusionModel(nn.Module):
-    def __init__(self, num_classes: int = 45) -> None:
+    def __init__(self, num_classes: int = 45):
         super().__init__()
+        self.fingerprint_branch = FingerprintBranch(out_dim=64)
+        self.iris_branch = IrisBranch(out_dim=32)   # shared for left/right
 
-        # Load pretrained MobileNet – fully frozen
-        weights = MobileNet_V2_Weights.IMAGENET1K_V1
-        mobilenet = models.mobilenet_v2(weights=weights)
-
-        self.fingerprint_features = mobilenet.features
-        for param in self.fingerprint_features.parameters():
-            param.requires_grad = False
-        self.fingerprint_features.eval()
-
-        self.fp_pool = nn.AdaptiveAvgPool2d(1)
-        self.fp_flatten = nn.Flatten()
-
-        self.iris_branch = IrisBranch(output_dim=32)
-
-        # Linear classifier on concatenated features
-        self.dropout = nn.Dropout(0.8)          # strong dropout
-        self.classifier = nn.Linear(1280 + 32 + 32, num_classes)
-
-        # Initialise linear layer with small weights
-        nn.init.xavier_uniform_(self.classifier.weight, gain=0.1)
-        nn.init.zeros_(self.classifier.bias)
-
-        # ImageNet normalisation buffers
-        self.register_buffer(
-            '_mean',
-            torch.tensor([0.485, 0.456, 0.406]).view(1, 3, 1, 1)
-        )
-        self.register_buffer(
-            '_std',
-            torch.tensor([0.229, 0.224, 0.225]).view(1, 3, 1, 1)
+        # Classifier – small with moderate dropout
+        self.classifier = nn.Sequential(
+            nn.Linear(64 + 32 + 32, 128),
+            nn.BatchNorm1d(128),
+            nn.ReLU(),
+            nn.Dropout(0.3),           # was 0.8 — caused mode collapse
+            nn.Linear(128, num_classes),
         )
 
-    def _prepare_fingerprint(self, x: Tensor) -> Tensor:
-        """Input (B,3,128,128) in [0,1] → (B,3,224,224) normalised."""
-        x = x.float()
-        if x.shape[2] != 224 or x.shape[3] != 224:
-            x = torch.nn.functional.interpolate(
-                x, size=(224, 224), mode='bilinear', align_corners=False
-            )
-        x = (x - self._mean.to(x.device)) / self._std.to(x.device)
-        return x
+        # Initialize weights
+        for m in self.modules():
+            if isinstance(m, (nn.Conv2d, nn.Linear)):
+                nn.init.kaiming_normal_(m.weight, mode='fan_out', nonlinearity='relu')
+                if m.bias is not None:
+                    nn.init.zeros_(m.bias)
 
     def forward(self, inputs: dict[str, Tensor]) -> Tensor:
-        # Fingerprint – frozen
-        fp_raw = inputs["fingerprint"]
-        fp_prep = self._prepare_fingerprint(fp_raw)
-        with torch.no_grad():
-            fp = self.fingerprint_features(fp_prep)
-        fp = self.fp_pool(fp)
-        fp = self.fp_flatten(fp)                     # (B, 1280)
+        fp = inputs["fingerprint"]          # (B, 3, 128, 128)
+        left = inputs["iris_left"]           # (B, 1, 128, 128)
+        right = inputs["iris_right"]         # (B, 1, 128, 128)
 
-        # Iris
-        left = self.iris_branch(inputs["iris_left"])   # (B, 32)
-        right = self.iris_branch(inputs["iris_right"]) # (B, 32)
+        fp_feat = self.fingerprint_branch(fp)   # (B, 64)
+        left_feat = self.iris_branch(left)      # (B, 32)
+        right_feat = self.iris_branch(right)    # (B, 32)
 
-        # Concatenate and classify
-        features = torch.cat([fp, left, right], dim=1) # (B, 1344)
-        features = self.dropout(features)
-        return self.classifier(features)
+        combined = torch.cat([fp_feat, left_feat, right_feat], dim=1)
+        return self.classifier(combined)
 
     @classmethod
     def from_config(cls, model_cfg, data_cfg, num_classes, feature_dims):

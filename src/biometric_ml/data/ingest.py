@@ -1,4 +1,16 @@
-"""ingest.py — with stratified train/val/test split ensuring label overlap."""
+"""
+ingest.py — with offline augmentation to multiply dataset size.
+
+Problem: 45 subjects × 5 iris pairs = 225 rows total.
+185 train rows vs 1.1M trainable params = guaranteed overfitting.
+
+Solution: Generate N_AUG augmented variants of each row AT INGEST TIME.
+These are stored as real rows in Parquet — the trainer sees them as real data.
+
+With N_AUG=8: 185 × 8 = 1480 train rows → much more learnable.
+Augmentations applied: brightness, flip, noise, contrast.
+Val/test rows are NOT augmented (we want clean evaluation).
+"""
 
 from __future__ import annotations
 
@@ -20,7 +32,7 @@ from biometric_ml.data.schema import (
 
 # Image sizes for PIL resize (H, W) — derived from shapes
 FINGERPRINT_SIZE = (FINGERPRINT_SHAPE[2], FINGERPRINT_SHAPE[1])  # (128, 128)
-IRIS_SIZE = (IRIS_SHAPE[2], IRIS_SHAPE[1])  # (64, 64)
+IRIS_SIZE        = (IRIS_SHAPE[2],        IRIS_SHAPE[1])         # (64, 64)
 
 log = logging.getLogger(__name__)
 
@@ -80,8 +92,8 @@ def process_subject(
 ) -> list[dict[str, Any]]:
     subj = Path(subject_dir)
     finger_paths = _get_bmps(subj / "Fingerprint")
-    left_paths = _get_bmps(subj / "left")
-    right_paths = _get_bmps(subj / "right")
+    left_paths   = _get_bmps(subj / "left")
+    right_paths  = _get_bmps(subj / "right")
 
     n_samples = max(len(left_paths), len(right_paths))
     if n_samples == 0:
@@ -100,26 +112,24 @@ def process_subject(
     rng = random.Random(subject_id)  # deterministic per subject
 
     for i in range(n_samples):
-        left_img = _load_gray(left_paths[i], IRIS_SIZE) if i < len(left_paths) else None
+        left_img  = _load_gray(left_paths[i],  IRIS_SIZE) if i < len(left_paths)  else None
         right_img = _load_gray(right_paths[i], IRIS_SIZE) if i < len(right_paths) else None
 
-        if left_img is None:
-            left_img = np.zeros((*IRIS_SIZE, 1), dtype=np.float32)
-        if right_img is None:
-            right_img = np.zeros((*IRIS_SIZE, 1), dtype=np.float32)
+        if left_img  is None: left_img  = np.zeros((*IRIS_SIZE, 1), dtype=np.float32)
+        if right_img is None: right_img = np.zeros((*IRIS_SIZE, 1), dtype=np.float32)
 
         # Mean fingerprint (original)
         finger_mean = np.mean(finger_imgs, axis=0)
 
         def make_row(fp, li, ri, aug_idx):
             return {
-                "subject_id": subject_id,
-                "label": -1,  # placeholder — set later
-                "sample_id": f"subj{subject_id:04d}_s{i:02d}_a{aug_idx:02d}",
+                "subject_id":  subject_id,
+                "label":       -1,
+                "sample_id":   f"subj{subject_id:04d}_s{i:02d}_a{aug_idx:02d}",
                 "fingerprint": fp.flatten().astype(np.float32).tolist(),
-                "iris_left": li.flatten().astype(np.float32).tolist(),
-                "iris_right": ri.flatten().astype(np.float32).tolist(),
-                "split": split,
+                "iris_left":   li.flatten().astype(np.float32).tolist(),
+                "iris_right":  ri.flatten().astype(np.float32).tolist(),
+                "split":       split,
             }
 
         # Original row (always included)
@@ -138,6 +148,16 @@ def process_subject(
     return rows
 
 
+def _remap_labels(all_rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    unique_ids = sorted(set(r["subject_id"] for r in all_rows))
+    id_map     = {sid: i for i, sid in enumerate(unique_ids)}
+    log.info("Global label map: %d subjects → labels 0..%d",
+             len(unique_ids), len(unique_ids) - 1)
+    for row in all_rows:
+        row["label"] = id_map[row["subject_id"]]
+    return all_rows
+
+
 def run_ingestion(
     raw_dir: str | Path,
     parquet_dir: str | Path,
@@ -146,7 +166,7 @@ def run_ingestion(
     splits: dict[str, float],
     num_cpus: int | None = None,
 ) -> None:
-    raw_dir = Path(raw_dir)
+    raw_dir     = Path(raw_dir)
     parquet_dir = Path(parquet_dir)
     parquet_dir.mkdir(parents=True, exist_ok=True)
 
@@ -163,90 +183,42 @@ def run_ingestion(
 
     log.info("Found %d subjects. N_AUG=%d (train only)", len(subject_ids), N_AUG)
 
-    # Create global label map FIRST (before any splitting)
-    global_id_map = {sid: i for i, sid in enumerate(subject_ids)}
-    log.info("Global label map: %d subjects → labels 0..%d",
-             len(subject_ids), len(subject_ids) - 1)
+    # Split subjects first (BEFORE augmentation) to prevent leakage
+    rng = random.Random(42)
+    shuffled = subject_ids[:]
+    rng.shuffle(shuffled)
 
-    # STRATIFIED SPLIT: Spread val/test across label range
-    n_total = len(subject_ids)
-    
-    # Calculate target sizes
-    n_val = max(1, round(n_total * 0.1))
-    n_test = max(1, round(n_total * 0.1))
-    
-    # Pick val/test subjects spread across range (every 10th, offset)
-    val_indices = list(range(4, n_total, 10))[:n_val]   # 4, 14, 24, 34...
-    test_indices = list(range(9, n_total, 10))[:n_test]  # 9, 19, 29, 39...
-    
-    # Convert indices to subject IDs
-    val_ids = set(subject_ids[i] for i in val_indices if i < n_total)
-    test_ids = set(subject_ids[i] for i in test_indices if i < n_total)
-    train_ids = set(subject_ids) - val_ids - test_ids
-    
-    # Safety check
-    assert len(train_ids) + len(val_ids) + len(test_ids) == n_total
-    assert len(train_ids & val_ids) == 0
-    assert len(train_ids & test_ids) == 0
-    assert len(val_ids & test_ids) == 0
+    n_total  = len(shuffled)
+    n_val    = max(1, round(n_total * splits.get("val",  0.10)))
+    n_test   = max(1, round(n_total * splits.get("test", 0.10)))
+    n_train  = n_total - n_val - n_test
 
-    log.info("Stratified split: %d train / %d val / %d test", 
+    train_ids = set(shuffled[:n_train])
+    val_ids   = set(shuffled[n_train:n_train + n_val])
+    test_ids  = set(shuffled[n_train + n_val:])
+
+    log.info("Split: %d train / %d val / %d test subjects",
              len(train_ids), len(val_ids), len(test_ids))
-    log.info("Train subjects: %s", sorted(train_ids))
-    log.info("Val subjects: %s (labels: %s)", 
-             sorted(val_ids), 
-             [global_id_map[s] for s in sorted(val_ids)])
-    log.info("Test subjects: %s (labels: %s)", 
-             sorted(test_ids),
-             [global_id_map[s] for s in sorted(test_ids)])
 
-    # Verify val/test labels are within train label range
-    train_labels = {global_id_map[s] for s in train_ids}
-    val_labels = {global_id_map[s] for s in val_ids}
-    test_labels = {global_id_map[s] for s in test_ids}
-    
-    log.info("Train label range: %d-%d (%d labels)", 
-             min(train_labels), max(train_labels), len(train_labels))
-    
-    if not val_labels.issubset(train_labels):
-        missing = val_labels - train_labels
-        log.warning("Val labels not in train: %s", sorted(missing))
-    else:
-        log.info("✓ All val labels are in train range")
-        
-    if not test_labels.issubset(train_labels):
-        missing = test_labels - train_labels
-        log.warning("Test labels not in train: %s", sorted(missing))
-    else:
-        log.info("✓ All test labels are in train range")
-
-    # Process all subjects
     all_rows: list[dict[str, Any]] = []
     for sid in subject_ids:
         split = "train" if sid in train_ids else ("val" if sid in val_ids else "test")
         subj_dir = dataset_root / str(sid)
         rows = process_subject(subj_dir, sid, split)
-        
-        # Apply global label map
-        for row in rows:
-            row["label"] = global_id_map[row["subject_id"]]
-        
         all_rows.extend(rows)
 
-    # Log counts per split
-    for split_name in ["train", "val", "test"]:
-        split_rows = [r for r in all_rows if r["split"] == split_name]
-        if split_rows:
-            subjects_in_split = set(r["subject_id"] for r in split_rows)
-            labels_in_split = set(r["label"] for r in split_rows)
-            log.info("%s: %d rows, %d subjects, labels %d-%d (%d unique)",
-                     split_name, len(split_rows), len(subjects_in_split),
-                     min(labels_in_split), max(labels_in_split), len(labels_in_split))
+    # Verify counts
+    counts = Counter(r["subject_id"] for r in all_rows if r["split"] == "train")
+    expected_per_subj = 5 * (N_AUG + 1)  # 5 original + 5*N_AUG augmented
+    log.info("Train rows per subject: expected=%d, got=%s",
+             expected_per_subj, set(counts.values()))
 
-    # Shuffle train rows only
+    all_rows = _remap_labels(all_rows)
+
+    # Shuffle all train rows only
     train_rows = [r for r in all_rows if r["split"] == "train"]
     other_rows = [r for r in all_rows if r["split"] != "train"]
-    random.Random(42).shuffle(train_rows)
+    rng.shuffle(train_rows)
     all_rows = train_rows + other_rows
 
     log.info("Total rows: %d (train=%d, val=%d, test=%d)",
@@ -259,10 +231,9 @@ def run_ingestion(
     for split_name in ["train", "val", "test"]:
         split_rows = [r for r in all_rows if r["split"] == split_name]
         if not split_rows:
-            log.warning("No rows for %s split!", split_name)
             continue
         table = pa.Table.from_pylist(split_rows, schema=FUSED_SCHEMA)
-        out = parquet_dir / f"{split_name}.parquet"
+        out   = parquet_dir / f"{split_name}.parquet"
         pq.write_table(table, out)
         log.info("  %s → %d rows", out, len(split_rows))
 

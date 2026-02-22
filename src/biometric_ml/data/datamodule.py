@@ -75,7 +75,7 @@ class BiometricDataModule:
             num_workers=self.cfg.num_workers,
             pin_memory=self.cfg.pin_memory,
             persistent_workers=False,
-            drop_last=True,           # Keep all samples — dataset too small to drop any
+            drop_last=True,            # BatchNorm fails on batch_size=1 (last incomplete batch)
         )
 
     def val_dataloader(self) -> DataLoader:

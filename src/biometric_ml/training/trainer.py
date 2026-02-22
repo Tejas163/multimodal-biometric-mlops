@@ -65,15 +65,24 @@ class CheckpointManager:
         return p
 
 
-def _augment_image(t: Tensor, flip_prob=0.5, rotate_deg=5, jitter=0.05) -> Tensor:
-    """Simple augmentation for both fingerprint and iris."""
+def _augment_image(t: Tensor, flip_prob=0.5, jitter=0.2, rotate_deg=10):
+    """Heavy augmentation for both modalities."""
     # Random horizontal flip
     if torch.rand(1) < flip_prob:
         t = t.flip(-1)
-    # Small random rotation (simulated by affine grid – simplified)
-    # For simplicity, we just add jitter and leave rotation for now.
+
+    # Random rotation (simplified – random shift)
+    # For simplicity, we'll just apply a random affine transform? Instead, we'll use random cropping + resize.
+    # But cropping would change size; we'll keep it simple for now: intensity jitter and maybe Gaussian noise.
+
     # Intensity jitter
     t = t * (1 + (torch.rand(1) - 0.5) * jitter)
+
+    # Add small Gaussian noise
+    if torch.rand(1) < 0.3:
+        noise = torch.randn_like(t) * 0.02
+        t = t + noise
+
     return t.clamp(0, 1)
 
 
@@ -86,21 +95,28 @@ class Trainer:
         self.device = device
         t = cfg.training
 
-        # Loss with optional class weights
         if class_weights is not None:
             class_weights = class_weights.to(device)
-        self.criterion = nn.CrossEntropyLoss(
-            label_smoothing=0.2,
-            weight=class_weights
-        )
+        self.criterion = nn.CrossEntropyLoss(label_smoothing=0.05, weight=class_weights)
 
-        # All trainable parameters are from iris branch and classifier
-        trainable_params = [p for p in model.parameters() if p.requires_grad]
-        log.info("Trainable parameters: %d tensors, total elements = %d",
-                 len(trainable_params),
-                 sum(p.numel() for p in trainable_params))
+        # Separate parameter groups
+        backbone_params = []
+        new_params = []
+        for name, param in model.named_parameters():
+            if param.requires_grad:
+                if 'fingerprint_features' in name:
+                    backbone_params.append(param)
+                else:
+                    new_params.append(param)
 
-        self.optimizer = Adam(trainable_params, lr=t.learning_rate, weight_decay=t.weight_decay)
+        log.info("Backbone trainable params: %d", len(backbone_params))
+        log.info("New layers trainable params: %d", len(new_params))
+
+        self.optimizer = Adam([
+            {'params': backbone_params, 'lr': t.backbone_lr},
+            {'params': new_params, 'lr': t.learning_rate}
+        ], weight_decay=t.weight_decay)
+
         self.scheduler = CosineAnnealingLR(self.optimizer, T_max=t.epochs, eta_min=1e-6)
         self.stopper = EarlyStopper(t.early_stopping_patience)
         self.ckpt_manager = CheckpointManager(Path(t.checkpoint.dir), t.checkpoint.save_top_k)
@@ -163,7 +179,6 @@ class Trainer:
 
     def _train(self):
         self.model.train()
-        # Fingerprint backbone is frozen and in eval mode already (from fusion.py)
         total_loss = 0.0
         total_grad_norm = 0.0
         num_batches = 0
@@ -171,7 +186,14 @@ class Trainer:
         for batch in self.train_loader:
             inp, lbl = self._unpack(batch)
 
-            # Apply augmentation to both modalities
+            # Debug: print input range first batch of first epoch
+            if num_batches == 0 and not hasattr(self, '_printed_range'):
+                print("\n[DEBUG] Input ranges:")
+                for k, v in inp.items():
+                    print(f"  {k}: min={v.min():.3f}, max={v.max():.3f}, mean={v.mean():.3f}")
+                self._printed_range = True
+
+            # Apply augmentation
             inp["fingerprint"] = _augment_image(inp["fingerprint"])
             inp["iris_left"] = _augment_image(inp["iris_left"])
             inp["iris_right"] = _augment_image(inp["iris_right"])
@@ -185,7 +207,7 @@ class Trainer:
             if self.grad_clip > 0:
                 nn.utils.clip_grad_norm_(self.model.parameters(), self.grad_clip)
 
-            # Compute total gradient norm for monitoring
+            # Compute total gradient norm
             total_norm = 0.0
             for p in self.model.parameters():
                 if p.grad is not None:
@@ -250,7 +272,7 @@ class Trainer:
         inp = {
             k: v.to(self.device).float()
             for k, v in batch.items()
-            if k != "label"
+            if k in ("fingerprint", "iris_left", "iris_right")
         }
         return inp, lbl
 

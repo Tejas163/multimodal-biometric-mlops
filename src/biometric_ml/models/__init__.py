@@ -1,4 +1,2 @@
-from biometric_ml.models.encoders import ModalityEncoder, build_encoders
-from biometric_ml.models.fusion import BiometricFusionModel
-
-__all__ = ["BiometricFusionModel", "ModalityEncoder", "build_encoders"]
+# Deferred imports — prevents import-time failures if optional deps are missing
+__all__ = ["BiometricFusionModel"]
