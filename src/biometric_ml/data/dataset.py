@@ -23,8 +23,11 @@ from torch import Tensor
 from torch.utils.data import Dataset
 
 from biometric_ml.data.schema import (
-    FINGERPRINT_DIM, FINGERPRINT_SHAPE,
-    IRIS_LEFT_DIM, IRIS_RIGHT_DIM, IRIS_SHAPE,
+    FINGERPRINT_DIM,
+    FINGERPRINT_SHAPE,
+    IRIS_LEFT_DIM,
+    IRIS_RIGHT_DIM,
+    IRIS_SHAPE,
 )
 
 

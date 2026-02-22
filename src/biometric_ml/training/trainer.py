@@ -5,20 +5,16 @@ from __future__ import annotations
 import heapq
 import logging
 import time
-from collections import Counter
 from pathlib import Path
 
 import mlflow
 import mlflow.pytorch
-import numpy as np
-import pyarrow.parquet as pq
 import torch
 import torch.nn as nn
 from omegaconf import DictConfig, OmegaConf
 from torch import Tensor
 from torch.optim import Adam
 from torch.optim.lr_scheduler import CosineAnnealingLR
-from torch.utils.data import DataLoader, Subset
 
 from biometric_ml.data.datamodule import BiometricDataModule, DataConfig
 from biometric_ml.data.dataset import BiometricDataset
@@ -100,7 +96,7 @@ class Trainer:
         self.criterion = nn.CrossEntropyLoss(label_smoothing=0.05, weight=class_weights)
 
         # Single optimizer — all params trained at same LR
-        # (backbone_params split was broken: looked for 'fingerprint_features' 
+        # (backbone_params split was broken: looked for 'fingerprint_features'
         #  but model uses 'fingerprint_branch')
         all_params = [p for p in model.parameters() if p.requires_grad]
         log.info("Trainable param tensors: %d", len(all_params))

@@ -19,16 +19,15 @@ from __future__ import annotations
 import logging
 import random
 from pathlib import Path
-from typing import Any
 
 import numpy as np
 import pyarrow as pa
 import pyarrow.parquet as pq
 
 from biometric_ml.data.schema import (
-    FINGERPRINT_DIM, FINGERPRINT_SHAPE,
-    IRIS_LEFT_DIM, IRIS_RIGHT_DIM, IRIS_SHAPE,
+    FINGERPRINT_SHAPE,
     FUSED_SCHEMA,
+    IRIS_SHAPE,
 )
 
 log = logging.getLogger(__name__)
