@@ -7,6 +7,9 @@ Usage:
 
     # Start MLflow with model serving
     python scripts/serve_mlflow.py --serve-model --port 5001
+
+    # Run inference demo
+    python scripts/serve_mlflow.py --demo
 """
 
 from __future__ import annotations
@@ -20,7 +23,6 @@ import torch
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from biometric_ml.inference.pipeline import InferencePipeline
-from biometric_ml.models.fusion import BiometricFusionModel
 from biometric_ml.utils.logging import setup_logging
 
 
@@ -30,13 +32,16 @@ def start_mlflow_ui(tracking_uri: str, port: int):
 
     mlflow.set_tracking_uri(tracking_uri)
 
-    print(f"\n{'=' * 60}")
-    print(f"Starting MLflow UI")
+    print()
+    print("=" * 60)
+    print("Starting MLflow UI")
     print(f"Tracking URI: {tracking_uri}")
     print(f"UI Port: {port}")
-    print(f"{'=' * 60}\n")
+    print("=" * 60)
+    print()
     print(f"Open http://localhost:{port} in your browser")
-    print(f"Press Ctrl+C to stop\n")
+    print("Press Ctrl+C to stop")
+    print()
 
     import subprocess
 
@@ -54,13 +59,16 @@ def serve_model(
 
     mlflow.set_tracking_uri(tracking_uri)
 
-    print(f"\n{'=' * 60}")
-    print(f"Starting MLflow model serving")
+    print()
+    print("=" * 60)
+    print("Starting MLflow model serving")
     print(f"Model: {model_name}")
     print(f"Port: {port}")
-    print(f"{'=' * 60}\n")
+    print("=" * 60)
+    print()
 
-    subprocess = __import__("subprocess")
+    import subprocess
+
     subprocess.run(
         [
             "mlflow",
@@ -101,12 +109,13 @@ def run_inference_demo(tracking_uri: str, model_name: str):
 
     result = pipeline.predict(sample)
 
-    print(f"\n{'=' * 60}")
-    print(f"Inference Result")
-    print(f"{'=' * 60}")
-    print(f"Top-5 predictions:")
-    for i, (cls, prob) in enumerate(zip(result.top_k_ids, result.top_k_probs)):
-        print(f"  {i + 1}. Class {cls}: {prob:.4f}")
+    print()
+    print("=" * 60)
+    print("Inference Result")
+    print("=" * 60)
+    print("Top-5 predictions:")
+    for i, (cls, prob) in enumerate(zip(result.top_k_ids, result.top_k_probs), 1):
+        print(f"  {i}. Class {cls}: {prob:.4f}")
     print()
 
 

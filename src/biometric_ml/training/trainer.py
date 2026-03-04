@@ -17,7 +17,6 @@ from torch.optim import Adam
 from torch.optim.lr_scheduler import CosineAnnealingLR
 
 from biometric_ml.data.datamodule import BiometricDataModule, DataConfig
-from biometric_ml.data.dataset import BiometricDataset
 from biometric_ml.models.fusion import BiometricFusionModel
 from biometric_ml.training.reproducibility import seed_everything
 
@@ -233,11 +232,13 @@ class Trainer:
             num_samples += lbl.size(0)
 
         # Show which subjects the model gets right
-        correct_subjects = [l for l, p in zip(all_labels, all_preds) if l == p]
+        correct_subjects = [label for label, pred in zip(all_labels, all_preds) if label == pred]
         log.debug("Val correct subjects: %s / %d total", sorted(correct_subjects), num_samples)
         if correct_1 == 0:
             # Show closest misses (label in top-3 preds)
-            near_misses = sum(1 for l, p in zip(all_labels, all_preds) if abs(l - p) <= 2)
+            near_misses = sum(
+                1 for label, pred in zip(all_labels, all_preds) if abs(label - pred) <= 2
+            )
             log.debug("Near misses (|label-pred|<=2): %d", near_misses)
 
         avg_loss = total_loss / max(len(self.val_loader), 1)
@@ -349,26 +350,6 @@ def build_and_fit(cfg: DictConfig) -> None:
 
 def build_and_fit_cv(cfg: DictConfig) -> None:
     """5-fold cross-validation training."""
-    seed_everything(cfg.training.seed, cfg.training.deterministic)
+    from biometric_ml.training.cross_validation import cross_validate
 
-    parquet_dir = Path(cfg.data.parquet_dir)
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-
-    folds = _create_folds(parquet_dir, n_folds=5, seed=cfg.training.seed)
-
-    base_dataset = BiometricDataset(
-        parquet_dir / "train.parquet", ["fingerprint", "iris_left", "iris_right"]
-    )
-
-    num_classes = base_dataset.num_classes
-    log.info("Total subjects (classes): %d", num_classes)
-
-    output_dir = Path(cfg.training.checkpoint.dir) / "cv_folds"
-    output_dir.mkdir(parents=True, exist_ok=True)
-
-    all_metrics = []
-    for fold_config in folds:
-        metrics = _train_fold(fold_config, base_dataset, cfg, device, output_dir, num_classes)
-        all_metrics.append(metrics)
-
-    _log_cv_summary(all_metrics)
+    cross_validate(cfg)
