@@ -35,7 +35,6 @@ def create_folds(parquet_dir: Path, n_folds: int = 5, seed: int = 42) -> list[di
     d = table.to_pydict()
 
     subject_ids = np.array(d["subject_id"])
-    labels = np.array(d["label"])
     n_samples = len(subject_ids)
 
     # Group samples by subject for stratified splitting
@@ -146,9 +145,6 @@ def train_fold(
 
     # Train
     trainer = Trainer(model, fold_cfg, train_loader, val_loader, device)
-
-    # Monkey-patch fit to save best metrics
-    best_metrics = {"val_loss": float("inf"), "top1": 0.0, "top5": 0.0}
 
     original_fit = trainer.fit
 

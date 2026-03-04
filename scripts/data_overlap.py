@@ -1,10 +1,16 @@
+"""Check for label overlap between train/val/test splits."""
+
+from __future__ import annotations
+
 import pyarrow.parquet as pq
+
 
 def check_labels(split):
     table = pq.read_table(f"data/parquet/{split}.parquet", columns=["subject_id", "label"])
     d = table.to_pydict()
     labels = set(d["label"])
     return labels
+
 
 train_labels = check_labels("train")
 val_labels = check_labels("val")
