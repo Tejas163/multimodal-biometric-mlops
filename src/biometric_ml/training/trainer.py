@@ -70,8 +70,7 @@ def _augment_image(t: Tensor, flip_prob=0.5, jitter=0.2, rotate_deg=10):
         t = t.flip(-1)
 
     # Random rotation (simplified – random shift)
-    # For simplicity, we'll just apply a random affine transform? Instead, we'll use random cropping + resize.
-    # But cropping would change size; we'll keep it simple for now: intensity jitter and maybe Gaussian noise.
+    # For simplicity, we skip rotation and use intensity jitter and Gaussian noise instead.
 
     # Intensity jitter
     t = t * (1 + (torch.rand(1) - 0.5) * jitter)

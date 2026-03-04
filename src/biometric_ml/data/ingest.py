@@ -33,7 +33,7 @@ from biometric_ml.data.schema import (
 log = logging.getLogger(__name__)
 
 FINGERPRINT_SIZE = (FINGERPRINT_SHAPE[2], FINGERPRINT_SHAPE[1])  # (128, 128)
-IRIS_SIZE        = (IRIS_SHAPE[2],        IRIS_SHAPE[1])         # (64, 64)
+IRIS_SIZE = (IRIS_SHAPE[2], IRIS_SHAPE[1])  # (64, 64)
 N_AUG = 8  # augmented copies per train sample
 
 
@@ -53,8 +53,8 @@ def _get_bmps(folder: Path) -> list[Path]:
 def _load_rgb(path: Path, size: tuple) -> np.ndarray | None:
     try:
         from PIL import Image
-        return np.array(Image.open(path).convert("RGB").resize(size),
-                        dtype=np.float32) / 255.0
+
+        return np.array(Image.open(path).convert("RGB").resize(size), dtype=np.float32) / 255.0
     except Exception:
         return None
 
@@ -62,8 +62,8 @@ def _load_rgb(path: Path, size: tuple) -> np.ndarray | None:
 def _load_gray(path: Path, size: tuple) -> np.ndarray | None:
     try:
         from PIL import Image
-        img = np.array(Image.open(path).convert("L").resize(size),
-                       dtype=np.float32) / 255.0
+
+        img = np.array(Image.open(path).convert("L").resize(size), dtype=np.float32) / 255.0
         return img[:, :, np.newaxis]
     except Exception:
         return None
@@ -79,13 +79,13 @@ def _augment(arr: np.ndarray, rng: random.Random) -> np.ndarray:
 
 def _make_row(subject_id, label, sample_id, fp, li, ri, split):
     return {
-        "subject_id":  subject_id,
-        "label":       label,
-        "sample_id":   sample_id,
+        "subject_id": subject_id,
+        "label": label,
+        "sample_id": sample_id,
         "fingerprint": fp.flatten().astype(np.float32).tolist(),
-        "iris_left":   li.flatten().astype(np.float32).tolist(),
-        "iris_right":  ri.flatten().astype(np.float32).tolist(),
-        "split":       split,
+        "iris_left": li.flatten().astype(np.float32).tolist(),
+        "iris_right": ri.flatten().astype(np.float32).tolist(),
+        "split": split,
     }
 
 
@@ -97,8 +97,8 @@ def process_subject(subject_dir: Path, subject_id: int, label: int) -> dict[str,
     """
     subj = Path(subject_dir)
     finger_paths = _get_bmps(subj / "Fingerprint")
-    left_paths   = _get_bmps(subj / "left")
-    right_paths  = _get_bmps(subj / "right")
+    left_paths = _get_bmps(subj / "left")
+    right_paths = _get_bmps(subj / "right")
 
     n = min(len(left_paths), len(right_paths))
     if n == 0:
@@ -118,10 +118,12 @@ def process_subject(subject_dir: Path, subject_id: int, label: int) -> dict[str,
     train_rows, val_rows, test_rows = [], [], []
 
     for i in range(n):
-        li = _load_gray(left_paths[i],  IRIS_SIZE)
+        li = _load_gray(left_paths[i], IRIS_SIZE)
         ri = _load_gray(right_paths[i], IRIS_SIZE)
-        if li is None: li = np.zeros((*IRIS_SIZE, 1), dtype=np.float32)
-        if ri is None: ri = np.zeros((*IRIS_SIZE, 1), dtype=np.float32)
+        if li is None:
+            li = np.zeros((*IRIS_SIZE, 1), dtype=np.float32)
+        if ri is None:
+            ri = np.zeros((*IRIS_SIZE, 1), dtype=np.float32)
 
         sid = f"s{subject_id:04d}_i{i:02d}"
 
@@ -137,13 +139,17 @@ def process_subject(subject_dir: Path, subject_id: int, label: int) -> dict[str,
             )
             for aug_i in range(N_AUG):
                 fp_src = rng.choice(finger_imgs)
-                train_rows.append(_make_row(
-                    subject_id, label, f"{sid}_a{aug_i:02d}",
-                    _augment(fp_src.copy(), rng),
-                    _augment(li.copy(), rng),
-                    _augment(ri.copy(), rng),
-                    "train",
-                ))
+                train_rows.append(
+                    _make_row(
+                        subject_id,
+                        label,
+                        f"{sid}_a{aug_i:02d}",
+                        _augment(fp_src.copy(), rng),
+                        _augment(li.copy(), rng),
+                        _augment(ri.copy(), rng),
+                        "train",
+                    )
+                )
 
     return {"train": train_rows, "val": val_rows, "test": test_rows}
 
@@ -156,7 +162,7 @@ def run_ingestion(
     splits: dict[str, float],
     num_cpus: int | None = None,
 ) -> None:
-    raw_dir     = Path(raw_dir)
+    raw_dir = Path(raw_dir)
     parquet_dir = Path(parquet_dir)
     parquet_dir.mkdir(parents=True, exist_ok=True)
 
@@ -165,23 +171,25 @@ def run_ingestion(
         dataset_root = raw_dir
 
     subject_ids = sorted(
-        int(d.name) for d in dataset_root.iterdir()
-        if d.is_dir() and d.name.isdigit()
+        int(d.name) for d in dataset_root.iterdir() if d.is_dir() and d.name.isdigit()
     )
     if num_subjects > 0:
         subject_ids = subject_ids[:num_subjects]
 
     # Global label map — consistent across all splits
     id_map = {sid: i for i, sid in enumerate(subject_ids)}
-    log.info("Subjects: %d | N_AUG=%d | Strategy: split-by-sample (all subjects in train+val)",
-             len(subject_ids), N_AUG)
+    log.info(
+        "Subjects: %d | N_AUG=%d | Strategy: split-by-sample (all subjects in train+val)",
+        len(subject_ids),
+        N_AUG,
+    )
 
     all_rows: dict[str, list] = {"train": [], "val": [], "test": []}
 
     for sid in subject_ids:
-        label    = id_map[sid]
+        label = id_map[sid]
         subj_dir = dataset_root / str(sid)
-        rows     = process_subject(subj_dir, sid, label)
+        rows = process_subject(subj_dir, sid, label)
         for split, r in rows.items():
             all_rows[split].extend(r)
 
@@ -193,11 +201,15 @@ def run_ingestion(
         if not rows:
             continue
         table = pa.Table.from_pylist(rows, schema=FUSED_SCHEMA)
-        out   = parquet_dir / f"{split_name}.parquet"
+        out = parquet_dir / f"{split_name}.parquet"
         pq.write_table(table, out)
         # Count unique subjects in this split
         labels = set(r["label"] for r in rows)
         log.info("  %s → %d rows, %d subjects", out, len(rows), len(labels))
 
-    log.info("Done. Train subjects: %d (all) | Val subjects: %d (all) | Val rows: %d",
-             len(subject_ids), len(subject_ids), len(all_rows["val"]))
+    log.info(
+        "Done. Train subjects: %d (all) | Val subjects: %d (all) | Val rows: %d",
+        len(subject_ids),
+        len(subject_ids),
+        len(all_rows["val"]),
+    )
