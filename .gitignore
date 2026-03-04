@@ -53,6 +53,8 @@ htmlcov/
 .env.local
 .env.production
 *.env
+# Exception for template file
+!.env.example
 # Kaggle credentials
 .kaggle/
 kaggle.json

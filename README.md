@@ -8,43 +8,43 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
 Production-quality ML infrastructure for **multimodal biometric user recognition**.  
-Fuses face, fingerprint, and voice modalities using a late-fusion PyTorch model, tracked end-to-end with MLflow, config-driven with Hydra, ingested in parallel with Ray, and stored in columnar Parquet via PyArrow.
+Fuses iris (left/right) and fingerprint modalities using a late-fusion PyTorch model, tracked end-to-end with MLflow, config-driven with Hydra, ingested in parallel with Ray, and stored in columnar Parquet via PyArrow.
 
 ---
 
 ## 📐 Architecture
 
 ```
-Raw biometric data  (face images / fingerprint scans / voice recordings)
-         │
-         ▼
+Raw biometric data  (iris images / fingerprint scans)
+          │
+          ▼
 ┌─────────────────────────────────────────────────────┐
 │  Ray Parallel Ingestion          (ingest.py)        │
 │  • One Ray remote task per subject → CPU-parallel   │
 │  • Normalise features, validate PyArrow schema      │
-│  • Write split-stratified Parquet (train/val/test)  │
+│  • Write split-stratified Parquet (train/val/test) │
 └──────────────────────┬──────────────────────────────┘
-                       │  Snappy-compressed Parquet
-                       ▼
+                        │  Snappy-compressed Parquet
+                        ▼
 ┌─────────────────────────────────────────────────────┐
 │  BiometricDataset            (dataset.py)           │
 │  • Reads only active-modality columns (PyArrow)     │
 │  • Zero-fills NULL modalities gracefully            │
 │  • Index-addressable → any PyTorch Sampler works    │
 └──────────────────────┬──────────────────────────────┘
-                       │  {modality: Tensor} batch dicts
-                       ▼
+                        │  {modality: Tensor} batch dicts
+                        ▼
 ┌─────────────────────────────────────────────────────┐
 │  BiometricFusionModel        (fusion.py)            │
 │                                                     │
-│  face    ──▶ ModalityEncoder ──┐                   │
-│  finger  ──▶ ModalityEncoder ──┼──▶ Fusion ──▶ MLP ──▶ logits
-│  voice   ──▶ ModalityEncoder ──┘                   │
+│  fingerprint ──▶ CNN Branch ──┐                    │
+│  iris_left   ──▶ CNN Branch ──┼──▶ Concat ──▶ MLP ──▶ logits
+│  iris_right  ──▶ CNN Branch ──┘                    │
 │                                                     │
 │  Fusion strategies: concat │ attention │ mean       │
 └──────────────────────┬──────────────────────────────┘
-                       │
-                       ▼
+                        │
+                        ▼
 ┌─────────────────────────────────────────────────────┐
 │  Trainer                     (trainer.py)           │
 │  • MLflow: params, metrics, config snapshot         │
@@ -198,12 +198,12 @@ pipeline = InferencePipeline.from_checkpoint(
 )
 
 result = pipeline.predict({
-    "face":        torch.randn(512).tolist(),
-    "fingerprint": torch.randn(256).tolist(),
-    "voice":       torch.randn(128).tolist(),
+    "fingerprint": torch.randn(3, 128, 128).tolist(),
+    "iris_left":    torch.randn(1, 64, 64).tolist(),
+    "iris_right":   torch.randn(1, 64, 64).tolist(),
 })
 
-print(result.top_k_ids)    # [42, 17, 8, 91, 3]
+print(result.top_k_ids)    # [6, 17, 8, 2, 3]
 print(result.top_k_probs)  # [0.61, 0.18, 0.09, 0.07, 0.05]
 ```
 
@@ -271,12 +271,11 @@ Every training run is fully reproducible:
 
 ## 🔬 Supported Modalities
 
-| Modality | Feature dim | Representation |
+| Modality | Shape | Representation |
 |---|---|---|
-| Face | 512 | L2-normalised embedding (ArcFace / FaceNet style) |
-| Fingerprint | 256 | Minutiae descriptor vector |
-| Voice | 128 | MFCC / x-vector speaker embedding |
-| Gait | 64 | Accelerometer cycle descriptor (optional) |
+| Fingerprint | 128×128×3 (RGB) | Raw pixel tensor |
+| Iris Left | 64×64×1 (grayscale) | Raw pixel tensor |
+| Iris Right | 64×64×1 (grayscale) | Raw pixel tensor |
 
 ---
 

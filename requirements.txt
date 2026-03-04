@@ -2,6 +2,9 @@
 torch>=2.1.0
 torchvision>=0.16.0
 
+# LLM Inference (optional - for vLLM-based feature extraction)
+vllm>=0.4.0
+
 # MLOps / Experiment tracking
 mlflow>=2.10.0
 
@@ -27,4 +30,3 @@ types-PyYAML
 scikit-image>=0.21.0
 Pillow>=10.0.0
 python-dotenv>=1.0.0   # load .env credentials
-kaggle>=1.6.0          # Kaggle dataset download CLI

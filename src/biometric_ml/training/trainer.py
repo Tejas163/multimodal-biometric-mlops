@@ -48,12 +48,15 @@ class CheckpointManager:
 
     def save(self, model, opt, epoch, loss) -> Path:
         p = self.d / f"epoch_{epoch:04d}_loss_{loss:.4f}.pt"
-        torch.save({
-            "epoch": epoch,
-            "model_state_dict": model.state_dict(),
-            "optimizer_state_dict": opt.state_dict(),
-            "val_loss": loss
-        }, p)
+        torch.save(
+            {
+                "epoch": epoch,
+                "model_state_dict": model.state_dict(),
+                "optimizer_state_dict": opt.state_dict(),
+                "val_loss": loss,
+            },
+            p,
+        )
         heapq.heappush(self.heap, (-loss, str(p)))
         if len(self.heap) > self.k:
             _, w = heapq.heappop(self.heap)
@@ -101,11 +104,7 @@ class Trainer:
         all_params = [p for p in model.parameters() if p.requires_grad]
         log.info("Trainable param tensors: %d", len(all_params))
 
-        self.optimizer = Adam(
-            all_params,
-            lr=t.learning_rate,
-            weight_decay=t.weight_decay
-        )
+        self.optimizer = Adam(all_params, lr=t.learning_rate, weight_decay=t.weight_decay)
 
         self.scheduler = CosineAnnealingLR(self.optimizer, T_max=t.epochs, eta_min=1e-6)
         self.stopper = EarlyStopper(t.early_stopping_patience)
@@ -131,19 +130,29 @@ class Trainer:
 
                     self.scheduler.step()
 
-                    mlflow.log_metrics({
-                        "train/loss": tr_loss,
-                        "val/loss": val_loss,
-                        "val/top1": top1,
-                        "val/top5": top5,
-                        "lr": lr,
-                        "grad_norm": grad_norm
-                    }, step=epoch)
+                    mlflow.log_metrics(
+                        {
+                            "train/loss": tr_loss,
+                            "val/loss": val_loss,
+                            "val/top1": top1,
+                            "val/top5": top5,
+                            "lr": lr,
+                            "grad_norm": grad_norm,
+                        },
+                        step=epoch,
+                    )
 
                     log.info(
                         "Epoch %03d | train=%.4f | val=%.4f | "
                         "top1=%.3f | top5=%.3f | lr=%.2e | grad=%.2e | %.1fs",
-                        epoch, tr_loss, val_loss, top1, top5, lr, grad_norm, elapsed
+                        epoch,
+                        tr_loss,
+                        val_loss,
+                        top1,
+                        top5,
+                        lr,
+                        grad_norm,
+                        elapsed,
                     )
 
                     if val_loss < best_loss:
@@ -163,7 +172,7 @@ class Trainer:
                 mlflow.pytorch.log_model(
                     self.model,
                     artifact_path="model",
-                    registered_model_name=self.cfg.mlflow.registered_model_name
+                    registered_model_name=self.cfg.mlflow.registered_model_name,
                 )
             log.info("Done. Best val loss: %.4f", best_loss)
 
@@ -175,13 +184,6 @@ class Trainer:
 
         for batch in self.train_loader:
             inp, lbl = self._unpack(batch)
-
-            # Debug: print input range first batch of first epoch
-            if num_batches == 0 and not hasattr(self, '_printed_range'):
-                print("\n[DEBUG] Input ranges:")
-                for k, v in inp.items():
-                    print(f"  {k}: min={v.min():.3f}, max={v.max():.3f}, mean={v.mean():.3f}")
-                self._printed_range = True
 
             # Apply augmentation
             inp["fingerprint"] = _augment_image(inp["fingerprint"])
@@ -203,7 +205,7 @@ class Trainer:
                 if p.grad is not None:
                     param_norm = p.grad.data.norm(2)
                     total_norm += param_norm.item() ** 2
-            total_norm = total_norm ** 0.5
+            total_norm = total_norm**0.5
             total_grad_norm += total_norm
 
             self.optimizer.step()
@@ -290,14 +292,16 @@ def build_and_fit(cfg: DictConfig) -> None:
     """Regular training with fixed train/val/test splits."""
     seed_everything(cfg.training.seed, cfg.training.deterministic)
 
-    dm = BiometricDataModule(DataConfig(
-        parquet_dir=cfg.data.parquet_dir,
-        active_modalities=["fingerprint", "iris_left", "iris_right"],
-        batch_size=cfg.training.batch_size,
-        num_workers=cfg.data.num_workers,
-        pin_memory=cfg.data.pin_memory,
-        train_transforms=None,
-    ))
+    dm = BiometricDataModule(
+        DataConfig(
+            parquet_dir=cfg.data.parquet_dir,
+            active_modalities=["fingerprint", "iris_left", "iris_right"],
+            batch_size=cfg.training.batch_size,
+            num_workers=cfg.data.num_workers,
+            pin_memory=cfg.data.pin_memory,
+            train_transforms=None,
+        )
+    )
 
     num_classes = dm.num_classes
     log.info("Subjects (classes): %d", num_classes)
@@ -312,8 +316,12 @@ def build_and_fit(cfg: DictConfig) -> None:
 
     trainable = sum(p.numel() for p in model.parameters() if p.requires_grad)
     total = sum(p.numel() for p in model.parameters())
-    log.info("Params trainable=%d / total=%d (%.1f%% frozen)",
-             trainable, total, 100 * (1 - trainable/total))
+    log.info(
+        "Params trainable=%d / total=%d (%.1f%% frozen)",
+        trainable,
+        total,
+        100 * (1 - trainable / total),
+    )
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     model = model.to(device)
@@ -334,8 +342,10 @@ def build_and_fit(cfg: DictConfig) -> None:
         else:
             log.info("Sanity check passed: %d unique predictions", unique_preds)
 
-    Trainer(model, cfg, dm.train_dataloader(), dm.val_dataloader(), device,
-            class_weights=class_weights).fit()
+    Trainer(
+        model, cfg, dm.train_dataloader(), dm.val_dataloader(), device, class_weights=class_weights
+    ).fit()
+
 
 def build_and_fit_cv(cfg: DictConfig) -> None:
     """5-fold cross-validation training."""
@@ -347,8 +357,7 @@ def build_and_fit_cv(cfg: DictConfig) -> None:
     folds = _create_folds(parquet_dir, n_folds=5, seed=cfg.training.seed)
 
     base_dataset = BiometricDataset(
-        parquet_dir / "train.parquet",
-        ["fingerprint", "iris_left", "iris_right"]
+        parquet_dir / "train.parquet", ["fingerprint", "iris_left", "iris_right"]
     )
 
     num_classes = base_dataset.num_classes
@@ -359,9 +368,7 @@ def build_and_fit_cv(cfg: DictConfig) -> None:
 
     all_metrics = []
     for fold_config in folds:
-        metrics = _train_fold(
-            fold_config, base_dataset, cfg, device, output_dir, num_classes
-        )
+        metrics = _train_fold(fold_config, base_dataset, cfg, device, output_dir, num_classes)
         all_metrics.append(metrics)
 
     _log_cv_summary(all_metrics)

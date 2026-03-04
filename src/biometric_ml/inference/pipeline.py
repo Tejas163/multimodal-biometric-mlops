@@ -23,9 +23,9 @@ Usage::
         tracking_uri="mlruns/",
     )
     result = pipeline.predict({
-        "face": face_embedding_tensor,          # (512,) float32
-        "fingerprint": fingerprint_tensor,       # (256,) float32
-        "voice": voice_tensor,                   # (128,) float32
+        "fingerprint": fingerprint_tensor,       # (3, 128, 128)
+        "iris_left": iris_left_tensor,            # (1, 64, 64)
+        "iris_right": iris_right_tensor,          # (1, 64, 64)
     })
     print(result.top_k_ids, result.top_k_probs)
 """
@@ -51,9 +51,9 @@ log = logging.getLogger(__name__)
 class PredictionResult:
     """Output of a single inference call."""
 
-    top_k_ids: list[int]        # Class indices, best first
-    top_k_probs: list[float]    # Corresponding softmax probabilities
-    embeddings: Tensor | None   # Fused embedding (if return_embeddings=True)
+    top_k_ids: list[int]  # Class indices, best first
+    top_k_probs: list[float]  # Corresponding softmax probabilities
+    embeddings: Tensor | None  # Fused embedding (if return_embeddings=True)
 
 
 class InferencePipeline:
@@ -109,17 +109,15 @@ class InferencePipeline:
         log.info("Loading model from MLflow registry: %s", model_uri)
         model = mlflow.pytorch.load_model(model_uri)
 
-        _device = torch.device(
-            device or ("cuda" if torch.cuda.is_available() else "cpu")
-        )
-        _modalities = active_modalities or ["face", "fingerprint", "voice"]
+        _device = torch.device(device or ("cuda" if torch.cuda.is_available() else "cpu"))
+        _modalities = active_modalities or ["fingerprint", "iris_left", "iris_right"]
         return cls(model=model, active_modalities=_modalities, device=_device, top_k=top_k)
 
     @classmethod
     def from_checkpoint(
         cls,
         checkpoint_path: str | Path,
-        model_factory,          # Callable that returns an uninitialised model
+        model_factory,  # Callable that returns an uninitialised model
         active_modalities: list[str],
         top_k: int = 5,
         device: str | None = None,
@@ -130,15 +128,15 @@ class InferencePipeline:
         Useful for offline evaluation or when MLflow is not available.
         """
         checkpoint_path = Path(checkpoint_path)
-        _device = torch.device(
-            device or ("cuda" if torch.cuda.is_available() else "cpu")
-        )
+        _device = torch.device(device or ("cuda" if torch.cuda.is_available() else "cpu"))
         ckpt = torch.load(checkpoint_path, map_location=_device)
         model = model_factory()
         model.load_state_dict(ckpt["model_state_dict"])
         log.info(
             "Loaded checkpoint from %s (epoch %d, val_loss %.4f)",
-            checkpoint_path, ckpt.get("epoch", -1), ckpt.get("val_loss", float("nan"))
+            checkpoint_path,
+            ckpt.get("epoch", -1),
+            ckpt.get("val_loss", float("nan")),
         )
         return cls(model=model, active_modalities=active_modalities, device=_device, top_k=top_k)
 
@@ -164,8 +162,8 @@ class InferencePipeline:
             PredictionResult with top-k class IDs and probabilities.
         """
         inputs = self._validate_and_prepare(features)
-        logits: Tensor = self.model(inputs)         # (1, num_classes)
-        probs: Tensor = F.softmax(logits, dim=-1)   # (1, num_classes)
+        logits: Tensor = self.model(inputs)  # (1, num_classes)
+        probs: Tensor = F.softmax(logits, dim=-1)  # (1, num_classes)
 
         top_probs, top_ids = probs[0].topk(min(self.top_k, probs.shape[-1]))
 
@@ -186,9 +184,7 @@ class InferencePipeline:
     # Helpers
     # ------------------------------------------------------------------
 
-    def _validate_and_prepare(
-        self, features: dict[str, list[float] | Tensor]
-    ) -> dict[str, Tensor]:
+    def _validate_and_prepare(self, features: dict[str, list[float] | Tensor]) -> dict[str, Tensor]:
         """Validate feature dict, convert to tensors, move to device."""
         prepared: dict[str, Tensor] = {}
         for modality in self.active_modalities:
@@ -205,9 +201,7 @@ class InferencePipeline:
             elif isinstance(value, Tensor):
                 tensor = value.float()
             else:
-                raise TypeError(
-                    f"Unsupported feature type for '{modality}': {type(value)}"
-                )
+                raise TypeError(f"Unsupported feature type for '{modality}': {type(value)}")
 
             if tensor.ndim == 1:
                 tensor = tensor.unsqueeze(0)  # Add batch dimension → (1, dim)
