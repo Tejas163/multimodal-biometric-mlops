@@ -48,7 +48,7 @@ log = logging.getLogger(__name__)
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(add_help=False)
-    parser.add_argument("--cv", action="store_true", 
+    parser.add_argument("--cv", action="store_true",
                         help="Use 5-fold cross-validation instead of fixed splits")
     return parser.parse_known_args()
 
@@ -57,18 +57,18 @@ def parse_args() -> argparse.Namespace:
 def main(cfg: DictConfig) -> None:
     setup_logging(level="DEBUG", json_format=False)
     log = logging.getLogger(__name__)
-    
+
     # Check for --cv flag
     cv_args, _ = parse_args()
-    
+
     if cv_args.cv:
         log.info("Starting 5-fold cross-validation training")
-        log.info("Seed: %d | Deterministic: %s", 
+        log.info("Seed: %d | Deterministic: %s",
                  cfg.training.seed, cfg.training.deterministic)
         build_and_fit_cv(cfg)
     else:
         log.info("Starting regular training run")
-        log.info("Seed: %d | Deterministic: %s", 
+        log.info("Seed: %d | Deterministic: %s",
                  cfg.training.seed, cfg.training.deterministic)
         build_and_fit(cfg)
 

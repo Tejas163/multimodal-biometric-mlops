@@ -26,19 +26,19 @@ Usage:
 from __future__ import annotations
 
 import argparse
-import sys
 import random
+import sys
 from pathlib import Path
 
 import numpy as np
 import torch
-import torch.nn.functional as F
+import torch.nn.functional as functional
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
-from biometric_ml.models.fusion import BiometricFusionModel
-
 import pyarrow.parquet as pq
+
+from biometric_ml.models.fusion import BiometricFusionModel
 
 # ── Colours for terminal output ───────────────────────────────────────────────
 GREEN = "\033[92m"
@@ -206,7 +206,7 @@ def run_demo(
     print(f"\n{BOLD}Running inference...{RESET}")
     with torch.no_grad():
         logits = model(inputs)  # (1, num_classes)
-        probs = F.softmax(logits, dim=-1)[0]  # (num_classes,)
+        probs = functional.softmax(logits, dim=-1)[0]  # (num_classes,)
 
     k = min(top_k, num_classes)
     top_probs, top_labels = probs.topk(k)
@@ -224,7 +224,7 @@ def run_demo(
     predicted_subject = reverse_map.get(predicted_label, "?")
     correct = predicted_label == true_label
 
-    for rank, (label, prob) in enumerate(zip(top_labels, top_probs), 1):
+    for rank, (label, prob) in enumerate(zip(top_labels, top_probs, strict=True), 1):
         subj = reverse_map.get(label, "?")
         bar = confidence_bar(prob)
         pct = f"{prob * 100:.1f}%"

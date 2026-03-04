@@ -87,7 +87,7 @@ if len(all_labels) > 0:
             continue
         t = pq.read_table(p, columns=["subject_id", "label"])
         d = t.to_pydict()
-        pairs = sorted(set(zip(d["subject_id"], d["label"])))
+        pairs = sorted(set(zip(d["subject_id"], d["label"], strict=True)))
         print(f"\n  {split}: subject_id → label")
         for sid, lbl in pairs[:6]:
             print(f"    Subject {sid:>2} → label {lbl}")

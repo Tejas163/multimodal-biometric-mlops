@@ -21,7 +21,6 @@ import torch
 from biometric_ml.data.dataset import BiometricDataset
 from biometric_ml.data.schema import FUSED_SCHEMA
 
-
 # ---------------------------------------------------------------------------
 # Fixtures
 # ---------------------------------------------------------------------------

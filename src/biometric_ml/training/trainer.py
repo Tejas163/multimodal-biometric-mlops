@@ -231,12 +231,16 @@ class Trainer:
             num_samples += lbl.size(0)
 
         # Show which subjects the model gets right
-        correct_subjects = [label for label, pred in zip(all_labels, all_preds) if label == pred]
+        correct_subjects = [
+            label for label, pred in zip(all_labels, all_preds, strict=True) if label == pred
+        ]
         log.debug("Val correct subjects: %s / %d total", sorted(correct_subjects), num_samples)
         if correct_1 == 0:
             # Show closest misses (label in top-3 preds)
             near_misses = sum(
-                1 for label, pred in zip(all_labels, all_preds) if abs(label - pred) <= 2
+                1
+                for label, pred in zip(all_labels, all_preds, strict=True)
+                if abs(label - pred) <= 2
             )
             log.debug("Near misses (|label-pred|<=2): %d", near_misses)
 

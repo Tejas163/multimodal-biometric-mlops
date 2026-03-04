@@ -114,7 +114,7 @@ def run_inference_demo(tracking_uri: str, model_name: str):
     print("Inference Result")
     print("=" * 60)
     print("Top-5 predictions:")
-    for i, (cls, prob) in enumerate(zip(result.top_k_ids, result.top_k_probs), 1):
+    for i, (cls, prob) in enumerate(zip(result.top_k_ids, result.top_k_probs, strict=True), 1):
         print(f"  {i}. Class {cls}: {prob:.4f}")
     print()
 

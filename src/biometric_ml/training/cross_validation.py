@@ -10,12 +10,12 @@ import mlflow
 import numpy as np
 import pyarrow.parquet as pq
 import torch
+from omegaconf import DictConfig, OmegaConf
 from torch.utils.data import DataLoader, Subset
 
 from biometric_ml.data.dataset import BiometricDataset
 from biometric_ml.models.fusion import BiometricFusionModel
 from biometric_ml.training.trainer import Trainer
-from omegaconf import DictConfig, OmegaConf
 
 log = logging.getLogger(__name__)
 
